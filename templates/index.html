@@ -105,7 +105,7 @@
     <h1 class="text-4xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
       🎵 酷狗VIP自动领取工具
     </h1>
-    <p class="text-gray-400 mt-2 text-sm">支持多账号管理 · 每日自动签到(畅听+概念VIP) · 实时进度推送</p>
+    <p class="text-gray-400 mt-2 text-sm">支持多账号管理 · VIP过期自动续领(畅听+概念VIP) · 实时进度推送</p>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -404,6 +404,7 @@ let qrPollingTimer = null;
 let currentQrKey = '';
 let smsCountdown = 0;
 let smsTimer = null;
+let _lastAutoRenewCheckAt = 0;
 
 // ========== 工具函数 ==========
 function toast(message, type = 'info') {
@@ -656,7 +657,7 @@ async function loadAccounts() {
         </div>
         <!-- 自动签到开关 -->
         <div class="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
-          <span class="text-xs text-gray-400">自动每日领取VIP</span>
+          <span class="text-xs text-gray-400">VIP过期自动续领</span>
           <div class="flex items-center gap-2">
             <span class="text-xs ${acc.auto_claim ? 'text-green-400' : 'text-gray-500'}">${acc.auto_claim ? '已开启' : '已关闭'}</span>
             <button onclick="toggleAutoClaim('${acc.userid}', this)"
@@ -815,6 +816,11 @@ function appendLog(event) {
     sign_in_success: 'text-green-400',
     sign_in_failed: 'text-red-400',
     sign_in_start: 'text-blue-400',
+    renew_success: 'text-green-400',
+    renew_failed: 'text-red-400',
+    renew_start: 'text-blue-400',
+    renew_skip: 'text-yellow-400',
+    renew_check_failed: 'text-yellow-400',
     token_refresh: 'text-yellow-400',
     token_refresh_failed: 'text-red-400',
     tvip_claim: 'text-green-400',
@@ -825,6 +831,11 @@ function appendLog(event) {
     sign_in_success: '✅',
     sign_in_failed: '❌',
     sign_in_start: '🔄',
+    renew_success: '♻️',
+    renew_failed: '❌',
+    renew_start: '🔍',
+    renew_skip: '⏭️',
+    renew_check_failed: '⚠️',
     token_refresh: '♻️',
     token_refresh_failed: '⚠️',
     tvip_claim: '🎵',
@@ -884,6 +895,15 @@ async function pollEvents() {
       if (shouldRefresh) setTimeout(loadAccounts, 500);
     }
   } catch {}
+
+  // 页面在线时，定期检查是否有账号 VIP 已过期，需要立刻自动续领
+  const now = Date.now();
+  if (now - _lastAutoRenewCheckAt >= 15000) {
+    _lastAutoRenewCheckAt = now;
+    try {
+      await api('POST', '/api/vip/auto-renew/check');
+    } catch {}
+  }
 }
 
 function stopPolling() {

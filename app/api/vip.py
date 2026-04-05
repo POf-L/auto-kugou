@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.models import get_db, Account, init_db
 from app.services import vip_service
-from app.tasks.scheduler import emit_event, auto_sign_all, refresh_all_tokens, get_recent_events
+from app.tasks.scheduler import emit_event, auto_sign_all, auto_renew_all, maybe_auto_renew_all, refresh_all_tokens, get_recent_events
 from app.config import CRON_SECRET
 
 
@@ -76,6 +76,12 @@ async def refresh_token_all():
     return {"success": True, "message": "Token刷新任务执行完成"}
 
 
+@router.post("/auto-renew/check")
+async def auto_renew_check():
+    """页面在线时触发的自动续领检查（秒级响应，带节流）"""
+    return await maybe_auto_renew_all()
+
+
 @router.get("/logs/{userid}")
 async def get_claim_logs(userid: str, limit: int = 20, db=Depends(get_db)):
     """获取账号的领取日志"""
@@ -95,14 +101,14 @@ async def poll_events(after_id: int = 0, limit: int = 50):
 
 @router.post("/cron/sign-in")
 async def cron_sign_in(request: Request):
-    """Vercel Cron: 每日自动签到（由 vercel.json cron 配置触发）"""
+    """Vercel Cron: 每日检查账号 VIP，过期后自动续领"""
     # 验证 Cron 密钥
     auth = request.headers.get("authorization", "")
     if auth != f"Bearer {CRON_SECRET}":
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    await auto_sign_all()
-    return {"success": True, "message": "Cron: 自动签到完成"}
+    await auto_renew_all()
+    return {"success": True, "message": "Cron: 过期VIP自动续领检查完成"}
 
 
 @router.post("/cron/refresh-token")

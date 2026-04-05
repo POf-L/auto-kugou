@@ -18,6 +18,48 @@ def _now():
     return datetime.now(_CST)
 
 
+def _parse_vip_expire_time(value) -> datetime | None:
+    """解析 VIP 过期时间，统一转为中国时区"""
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value.astimezone(_CST) if value.tzinfo else value.replace(tzinfo=_CST)
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    # Unix 时间戳 / 毫秒时间戳
+    if raw.isdigit():
+        if len(raw) == 13:
+            return datetime.fromtimestamp(int(raw) / 1000, tz=_CST)
+        if len(raw) == 10:
+            return datetime.fromtimestamp(int(raw), tz=_CST)
+
+    datetime_formats = (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y%m%d%H%M%S",
+    )
+    for fmt in datetime_formats:
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=_CST)
+        except ValueError:
+            pass
+
+    # 只有日期时，默认当天 23:59:59 才算过期
+    date_formats = ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d")
+    for fmt in date_formats:
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.replace(tzinfo=_CST, hour=23, minute=59, second=59)
+        except ValueError:
+            pass
+
+    return None
+
+
 VIP_TYPE_MAP = {
     0: "普通用户",
     1: "VIP会员",
@@ -103,7 +145,7 @@ async def get_sign_info(token: str, userid: str) -> dict:
         result = await kugou_client.get_sign_info(token=token, userid=userid)
         data = result.get("data") or {}
 
-        today_str = date.today().strftime("%Y-%m-%d")  # e.g. "2026-04-05"
+        today_str = _now().date().strftime("%Y-%m-%d")  # 使用中国时区
 
         # data 可能直接是 list（部分版本），也可能是 {"list": [...]}
         records = []
@@ -131,6 +173,52 @@ async def get_sign_info(token: str, userid: str) -> dict:
     except Exception as e:
         logger.error(f"获取签到信息失败: {e}")
         return {"success": False, "message": str(e), "signed_today": False}
+
+
+async def should_auto_renew(token: str, userid: str) -> dict:
+    """
+    判断账号当前是否需要自动续领：
+    - busi_vip 中仍有有效 VIP => 不续领
+    - 顶层 vip_type 且过期时间未到 => 不续领
+    - 其余情况 => 允许自动续领
+    """
+    vip_status = await get_vip_status(token, userid)
+    if not vip_status.get("success"):
+        return {
+            "success": False,
+            "should_renew": True,
+            "message": vip_status.get("message", "获取VIP状态失败，将继续尝试自动续领"),
+            "expire_time": "",
+        }
+
+    active_vips = vip_status.get("active_vips") or []
+    if active_vips:
+        preferred = next((v for v in active_vips if v.get("product_type") == "svip"), None) or active_vips[0]
+        return {
+            "success": True,
+            "should_renew": False,
+            "message": "当前VIP仍有效，跳过自动续领",
+            "expire_time": preferred.get("vip_end_time", ""),
+        }
+
+    expire_time = vip_status.get("expire_time") or ""
+    expire_at = _parse_vip_expire_time(expire_time)
+    vip_type = int(vip_status.get("vip_type", 0) or 0)
+
+    if vip_type > 0 and expire_at and expire_at > _now():
+        return {
+            "success": True,
+            "should_renew": False,
+            "message": "当前VIP仍有效，跳过自动续领",
+            "expire_time": expire_time,
+        }
+
+    return {
+        "success": True,
+        "should_renew": True,
+        "message": "当前VIP已过期，准备自动续领",
+        "expire_time": expire_time,
+    }
 
 
 async def do_sign_in(token: str, userid: str, db) -> dict:
