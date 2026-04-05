@@ -75,9 +75,9 @@
       <!-- 正常登录模式（默认显示） -->
       <div id="login-mode">
         <input id="login-username" type="text" placeholder="账号"
-          class="w-full px-4 py-3 rounded-xl text-sm" autocomplete="username" />
+          class="w-full px-4 py-3 rounded-xl text-sm" autocomplete="off" autocapitalize="off" spellcheck="false" />
         <input id="login-password" type="password" placeholder="密码"
-          class="w-full px-4 py-3 rounded-xl text-sm" autocomplete="current-password" />
+          class="w-full px-4 py-3 rounded-xl text-sm" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
         <p id="login-error" class="text-red-400 text-xs hidden"></p>
         <button onclick="doLogin()" id="btn-login"
           class="btn-primary w-full py-3 rounded-xl text-sm font-semibold">
@@ -245,6 +245,15 @@
 // ========== 管理员认证 ==========
 let authToken = localStorage.getItem('auth_token') || '';
 
+function resetDecoyLoginFields() {
+  const usernameEl = document.getElementById('login-username');
+  const passwordEl = document.getElementById('login-password');
+  if (!usernameEl || !passwordEl) return;
+  usernameEl.setAttribute('autocomplete', 'off');
+  passwordEl.setAttribute('autocomplete', 'new-password');
+  passwordEl.value = '';
+}
+
 async function checkAuth() {
   const overlay = document.getElementById('auth-overlay');
   const appLayer = document.getElementById('app-layer');
@@ -277,12 +286,20 @@ async function checkAuth() {
   } catch {}
 
   // 绑定登录层的回车事件
+  document.getElementById('login-username').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doLogin();
+  });
   document.getElementById('login-password').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') doLogin();
   });
   document.getElementById('setup-password2').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') doSetup();
   });
+
+  // 防止浏览器/密码管理器给伪装密码框自动填充，导致无法登录
+  resetDecoyLoginFields();
+  setTimeout(resetDecoyLoginFields, 200);
+  setTimeout(resetDecoyLoginFields, 1200);
 }
 
 async function doSetup() {
@@ -316,10 +333,10 @@ async function doSetup() {
 }
 
 async function doLogin() {
-  const username = document.getElementById('login-username').value;
+  const username = document.getElementById('login-username').value.trim();
   const password = document.getElementById('login-password').value;
   // 密码框有内容就直接报错（伪装）
-  if (password) {
+  if (password.trim()) {
     showLoginError('账号或密码错误');
     return;
   }
@@ -874,6 +891,7 @@ function stopPolling() {
 
 // ========== 页面初始化 ==========
 document.addEventListener('DOMContentLoaded', () => {
+  resetDecoyLoginFields();
   checkAuth();
 });
 </script>
