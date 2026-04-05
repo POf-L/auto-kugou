@@ -12,12 +12,10 @@ from datetime import datetime, timezone, timedelta
 from loguru import logger
 from sqlalchemy import select, update, delete
 
-from app.models import SessionLocal, Account, ProgressEvent, SystemSetting
+from app.models import SessionLocal, Account, ProgressEvent
 
 _CST = timezone(timedelta(hours=8))
 MAX_EVENTS = 100
-AUTO_RENEW_NEXT_CHECK_KEY = "auto_renew_next_check_at"
-AUTO_RENEW_MIN_INTERVAL = 15
 
 
 async def emit_event(event_type: str, userid: str, message: str, data: dict = None):
@@ -84,22 +82,6 @@ async def get_recent_events(limit: int = 50, after_id: int = 0) -> list[dict]:
     except Exception as e:
         logger.error(f"获取事件失败: {e}")
         return []
-
-
-def _get_setting(db, key: str) -> str:
-    result = db.execute(select(SystemSetting).where(SystemSetting.key == key))
-    row = result.scalar_one_or_none()
-    return row.value if row else ""
-
-
-def _set_setting(db, key: str, value: str):
-    result = db.execute(select(SystemSetting).where(SystemSetting.key == key))
-    row = result.scalar_one_or_none()
-    if row:
-        row.value = value
-    else:
-        db.add(SystemSetting(key=key, value=value))
-    db.commit()
 
 
 async def refresh_all_tokens():
@@ -224,36 +206,3 @@ async def auto_renew_all():
         db.close()
 
     logger.info("<<< 自动续领检查完成")
-
-
-async def maybe_auto_renew_all(min_interval_seconds: int = AUTO_RENEW_MIN_INTERVAL):
-    """带节流的自动续领检查，适合页面轮询时触发"""
-    db = SessionLocal()
-    try:
-        now = datetime.now(_CST)
-        next_check_raw = _get_setting(db, AUTO_RENEW_NEXT_CHECK_KEY)
-        if next_check_raw:
-            try:
-                next_check_at = datetime.fromisoformat(next_check_raw)
-                if next_check_at.tzinfo is None:
-                    next_check_at = next_check_at.replace(tzinfo=_CST)
-                if next_check_at > now:
-                    return {
-                        "success": True,
-                        "skipped": True,
-                        "message": "自动续领检查节流中",
-                        "next_check_at": next_check_at.isoformat(),
-                    }
-            except ValueError:
-                pass
-
-        _set_setting(
-            db,
-            AUTO_RENEW_NEXT_CHECK_KEY,
-            (now + timedelta(seconds=min_interval_seconds)).isoformat(),
-        )
-    finally:
-        db.close()
-
-    await auto_renew_all()
-    return {"success": True, "skipped": False, "message": "自动续领检查完成"}

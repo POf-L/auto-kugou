@@ -404,7 +404,6 @@ let qrPollingTimer = null;
 let currentQrKey = '';
 let smsCountdown = 0;
 let smsTimer = null;
-let _lastAutoRenewCheckAt = 0;
 
 // ========== 工具函数 ==========
 function toast(message, type = 'info') {
@@ -895,15 +894,6 @@ async function pollEvents() {
       if (shouldRefresh) setTimeout(loadAccounts, 500);
     }
   } catch {}
-
-  // 页面在线时，定期检查是否有账号 VIP 已过期，需要立刻自动续领
-  const now = Date.now();
-  if (now - _lastAutoRenewCheckAt >= 15000) {
-    _lastAutoRenewCheckAt = now;
-    try {
-      await api('POST', '/api/vip/auto-renew/check');
-    } catch {}
-  }
 }
 
 function stopPolling() {
