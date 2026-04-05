@@ -1,12 +1,12 @@
 """
 数据库模型定义
 支持 Turso (libSQL) 和本地 SQLite 双模式
+使用同步 SQLAlchemy（Serverless 兼容）
 """
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
-from app.config import DATABASE_URL
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from app.config import DATABASE_URL, TURSO_AUTH_TOKEN
 
 # 中国时区 UTC+8
 _CST = timezone(timedelta(hours=8))
@@ -76,33 +76,46 @@ class ProgressEvent(Base):
 
 
 # ========== 数据库引擎 ==========
-_is_turso = DATABASE_URL.startswith("libsql")
+_is_turso = DATABASE_URL.startswith("libsql://") or "turso.io" in DATABASE_URL
 
 if _is_turso:
-    # Turso / libSQL 模式
-    from libsql_experimental import create_async_engine as libsql_create_engine
-    engine = libsql_create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+    # Turso / libSQL 模式（远程连接）
+    # 使用 sqlalchemy-libsql 方言: sqlite+libsql://<url>?secure=true
+    if DATABASE_URL.startswith("http"):
+        # 原始 URL 格式: https://xxx.turso.io
+        sql_url = f"sqlite+libsql://{DATABASE_URL}?secure=true"
+    else:
+        sql_url = DATABASE_URL.replace("libsql://", "sqlite+libsql://", 1)
+        if "secure=true" not in sql_url:
+            sql_url += "?secure=true" if "?" not in sql_url else "&secure=true"
+
+    engine = create_engine(
+        sql_url,
+        connect_args={"auth_token": TURSO_AUTH_TOKEN} if TURSO_AUTH_TOKEN else {},
+    )
 else:
     # 本地 SQLite 模式
-    engine = create_async_engine(DATABASE_URL, echo=False)
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
-AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
-async def get_db():
+def get_db():
     """获取数据库会话（依赖注入）"""
-    async with AsyncSessionLocal() as session:
-        yield session
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 _db_initialized = False
 
 
-async def init_db():
+def init_db():
     """初始化数据库，创建所有表"""
     global _db_initialized
     if _db_initialized:
         return
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    Base.metadata.create_all(bind=engine)
     _db_initialized = True

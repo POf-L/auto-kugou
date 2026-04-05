@@ -4,7 +4,6 @@ VIP 服务层 - VIP状态查询、签到领取、自动续期
 """
 from datetime import datetime, timezone, timedelta, date
 from loguru import logger
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from app.services.kugou_client import kugou_client
@@ -134,7 +133,7 @@ async def get_sign_info(token: str, userid: str) -> dict:
         return {"success": False, "message": str(e), "signed_today": False}
 
 
-async def do_sign_in(token: str, userid: str, db: AsyncSession) -> dict:
+async def do_sign_in(token: str, userid: str, db) -> dict:
     """
     执行签到/领取VIP操作（对齐 EchoMusic 两步流程）
     第1步：领取畅听VIP (receive_vip_listen_song)
@@ -144,7 +143,7 @@ async def do_sign_in(token: str, userid: str, db: AsyncSession) -> dict:
         # 先检查今日是否已签到
         sign_info = await get_sign_info(token, userid)
         if sign_info.get("signed_today"):
-            await _write_claim_log(db, userid, "skipped", "今日已签到", "sign_in")
+            _write_claim_log(db, userid, "skipped", "今日已签到", "sign_in")
             return {
                 "success": True,
                 "skipped": True,
@@ -167,7 +166,7 @@ async def do_sign_in(token: str, userid: str, db: AsyncSession) -> dict:
             tvip_success = True  # 视为已领取
         else:
             tvip_err = tvip_result.get("error_msg") or tvip_result.get("errmsg") or tvip_result.get("msg") or f"畅听VIP领取失败(error_code={tvip_error_code})"
-            await _write_claim_log(db, userid, "failed", tvip_err, "receive_tvip")
+            _write_claim_log(db, userid, "failed", tvip_err, "receive_tvip")
             return {"success": False, "message": tvip_err}
 
         # 第2步：尝试升级概念VIP（需要先有畅听VIP）
@@ -206,8 +205,8 @@ async def do_sign_in(token: str, userid: str, db: AsyncSession) -> dict:
         else:
             full_msg = f"签到成功！{tvip_msg}（{svip_msg}）"
 
-        await _write_claim_log(db, userid, "success", full_msg, "sign_in")
-        await _update_account_claim_time(db, userid)
+        _write_claim_log(db, userid, "success", full_msg, "sign_in")
+        _update_account_claim_time(db, userid)
 
         return {
             "success": True,
@@ -222,37 +221,37 @@ async def do_sign_in(token: str, userid: str, db: AsyncSession) -> dict:
     except Exception as e:
         err = f"签到请求异常: {str(e)}"
         logger.error(err)
-        await _write_claim_log(db, userid, "failed", err, "sign_in")
+        _write_claim_log(db, userid, "failed", err, "sign_in")
         return {"success": False, "message": err}
 
 
-async def _write_claim_log(db: AsyncSession, userid: str, status: str, message: str, claim_type: str):
+def _write_claim_log(db, userid: str, status: str, message: str, claim_type: str):
     """写入领取日志"""
     try:
         log = ClaimLog(userid=userid, status=status, message=message, claim_type=claim_type)
         db.add(log)
-        await db.commit()
+        db.commit()
     except Exception as e:
         logger.error(f"写入日志失败: {e}")
 
 
-async def _update_account_claim_time(db: AsyncSession, userid: str):
+def _update_account_claim_time(db, userid: str):
     """更新账号最后领取时间"""
     try:
-        await db.execute(
+        db.execute(
             update(Account)
             .where(Account.userid == userid)
             .values(last_claim_time=_now())
         )
-        await db.commit()
+        db.commit()
     except Exception as e:
         logger.error(f"更新领取时间失败: {e}")
 
 
-async def get_claim_logs(db: AsyncSession, userid: str, limit: int = 20) -> list[dict]:
+def get_claim_logs(db, userid: str, limit: int = 20) -> list[dict]:
     """获取最近的领取日志"""
     try:
-        result = await db.execute(
+        result = db.execute(
             select(ClaimLog)
             .where(ClaimLog.userid == userid)
             .order_by(ClaimLog.created_at.desc())

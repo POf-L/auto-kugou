@@ -4,7 +4,6 @@
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from datetime import datetime, timezone, timedelta
 
@@ -39,11 +38,11 @@ class QrCheckRequest(BaseModel):
 
 
 @router.post("/login/password")
-async def login_password(req: PasswordLoginRequest, db: AsyncSession = Depends(get_db)):
+async def login_password(req: PasswordLoginRequest, db=Depends(get_db)):
     """账号密码登录"""
     result = await auth_service.login_by_password(req.username, req.password)
     if result.get("success"):
-        await _save_account(db, result, "password")
+        _save_account(db, result, "password")
         await emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（密码）")
     return result
 
@@ -55,11 +54,11 @@ async def send_sms(req: SmsCodeRequest):
 
 
 @router.post("/login/sms")
-async def login_sms(req: SmsLoginRequest, db: AsyncSession = Depends(get_db)):
+async def login_sms(req: SmsLoginRequest, db=Depends(get_db)):
     """手机验证码登录"""
     result = await auth_service.login_by_sms(req.mobile, req.code)
     if result.get("success"):
-        await _save_account(db, result, "sms")
+        _save_account(db, result, "sms")
         await emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（验证码）")
     return result
 
@@ -71,19 +70,19 @@ async def get_qrcode():
 
 
 @router.post("/login/qrcode/check")
-async def check_qrcode(req: QrCheckRequest, db: AsyncSession = Depends(get_db)):
+async def check_qrcode(req: QrCheckRequest, db=Depends(get_db)):
     """检查二维码登录状态"""
     result = await auth_service.check_qrcode_status(req.key)
     if result.get("qr_status") == "success" and result.get("success"):
-        await _save_account(db, result, "qrcode")
+        _save_account(db, result, "qrcode")
         await emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（扫码）")
     return result
 
 
 @router.get("/accounts")
-async def list_accounts(db: AsyncSession = Depends(get_db)):
+async def list_accounts(db=Depends(get_db)):
     """获取所有已登录账号（实时查询VIP状态）"""
-    result = await db.execute(select(Account).order_by(Account.created_at.desc()))
+    result = db.execute(select(Account).order_by(Account.created_at.desc()))
     accounts = result.scalars().all()
 
     # 并行查询所有账号的实时VIP状态
@@ -111,43 +110,43 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
             return {**_format_account(acc), "active_vips": [], "vip_expire": ""}
 
     accounts_data = await asyncio.gather(*[fetch_vip(acc) for acc in accounts])
-    await db.commit()
+    db.commit()
     return accounts_data
 
 
 @router.delete("/accounts/{userid}")
-async def remove_account(userid: str, db: AsyncSession = Depends(get_db)):
+async def remove_account(userid: str, db=Depends(get_db)):
     """移除账号"""
-    result = await db.execute(select(Account).where(Account.userid == userid))
+    result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
-    await db.delete(acc)
-    await db.commit()
+    db.delete(acc)
+    db.commit()
     return {"success": True, "message": "账号已移除"}
 
 
 @router.post("/accounts/{userid}/toggle_auto_claim")
-async def toggle_auto_claim(userid: str, db: AsyncSession = Depends(get_db)):
+async def toggle_auto_claim(userid: str, db=Depends(get_db)):
     """切换自动领取开关"""
-    result = await db.execute(select(Account).where(Account.userid == userid))
+    result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
     new_val = not acc.auto_claim
-    await db.execute(
+    db.execute(
         update(Account).where(Account.userid == userid).values(auto_claim=new_val)
     )
-    await db.commit()
+    db.commit()
     return {"success": True, "auto_claim": new_val}
 
 
-async def _save_account(db: AsyncSession, login_result: dict, login_type: str):
+def _save_account(db, login_result: dict, login_type: str):
     """保存或更新账号信息"""
     userid = login_result.get("userid", "")
     if not userid:
         return
-    result = await db.execute(select(Account).where(Account.userid == userid))
+    result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
 
     if acc:
@@ -171,7 +170,7 @@ async def _save_account(db: AsyncSession, login_result: dict, login_type: str):
             last_token_refresh=datetime.now(timezone(timedelta(hours=8))),
         )
         db.add(acc)
-    await db.commit()
+    db.commit()
 
 
 def _format_account(acc: Account) -> dict:

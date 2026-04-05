@@ -1,10 +1,7 @@
 """
 VIP 相关 API 路由
 """
-import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models import get_db, Account, init_db
@@ -17,9 +14,9 @@ router = APIRouter(prefix="/api/vip", tags=["vip"])
 
 
 @router.get("/status/{userid}")
-async def get_vip_status(userid: str, db: AsyncSession = Depends(get_db)):
+async def get_vip_status(userid: str, db=Depends(get_db)):
     """获取指定账号的VIP状态"""
-    result = await db.execute(select(Account).where(Account.userid == userid))
+    result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -27,9 +24,9 @@ async def get_vip_status(userid: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/status-raw/{userid}")
-async def get_vip_status_raw(userid: str, db: AsyncSession = Depends(get_db)):
+async def get_vip_status_raw(userid: str, db=Depends(get_db)):
     """获取VIP状态的原始API返回（调试用）"""
-    result = await db.execute(select(Account).where(Account.userid == userid))
+    result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -38,9 +35,9 @@ async def get_vip_status_raw(userid: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/sign-info/{userid}")
-async def get_sign_info(userid: str, db: AsyncSession = Depends(get_db)):
+async def get_sign_info(userid: str, db=Depends(get_db)):
     """获取签到信息"""
-    result = await db.execute(select(Account).where(Account.userid == userid))
+    result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -48,9 +45,9 @@ async def get_sign_info(userid: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/sign-in/{userid}")
-async def manual_sign_in(userid: str, db: AsyncSession = Depends(get_db)):
+async def manual_sign_in(userid: str, db=Depends(get_db)):
     """手动执行签到"""
-    result = await db.execute(select(Account).where(Account.userid == userid))
+    result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -80,9 +77,9 @@ async def refresh_token_all():
 
 
 @router.get("/logs/{userid}")
-async def get_claim_logs(userid: str, limit: int = 20, db: AsyncSession = Depends(get_db)):
+async def get_claim_logs(userid: str, limit: int = 20, db=Depends(get_db)):
     """获取账号的领取日志"""
-    return await vip_service.get_claim_logs(db, userid, limit)
+    return vip_service.get_claim_logs(db, userid, limit)
 
 
 # ========== 轮询接口（替代 SSE）==========

@@ -13,7 +13,6 @@ from datetime import datetime, timezone, timedelta
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models import get_db, SystemSetting
@@ -52,23 +51,23 @@ def validate_token(token: str | None) -> bool:
         return False
 
 
-async def _get_setting(db: AsyncSession, key: str) -> str:
+def _get_setting(db, key: str) -> str:
     """读取系统设置"""
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
+    result = db.execute(select(SystemSetting).where(SystemSetting.key == key))
     row = result.scalar_one_or_none()
     return row.value if row else ""
 
 
-async def _set_setting(db: AsyncSession, key: str, value: str):
+def _set_setting(db, key: str, value: str):
     """写入系统设置"""
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
+    result = db.execute(select(SystemSetting).where(SystemSetting.key == key))
     row = result.scalar_one_or_none()
     if row:
         row.value = value
     else:
         row = SystemSetting(key=key, value=value)
         db.add(row)
-    await db.commit()
+    db.commit()
 
 
 class SetupRequest(BaseModel):
@@ -81,29 +80,29 @@ class LoginRequest(BaseModel):
 
 
 @router.get("/status")
-async def admin_status(db: AsyncSession = Depends(get_db)):
+async def admin_status(db=Depends(get_db)):
     """检查是否已设置密码（首次访问引导用）"""
-    pw_hash = await _get_setting(db, "admin_password")
+    pw_hash = _get_setting(db, "admin_password")
     return {"initialized": bool(pw_hash)}
 
 
 @router.post("/setup")
-async def setup_password(req: SetupRequest, db: AsyncSession = Depends(get_db)):
+async def setup_password(req: SetupRequest, db=Depends(get_db)):
     """首次设置管理密码"""
-    existing = await _get_setting(db, "admin_password")
+    existing = _get_setting(db, "admin_password")
     if existing:
         raise HTTPException(status_code=400, detail="密码已设置，无法重复初始化")
 
     if not req.password or len(req.password) < 4:
         raise HTTPException(status_code=400, detail="密码长度不能少于4位")
 
-    await _set_setting(db, "admin_password", _hash_password(req.password))
+    _set_setting(db, "admin_password", _hash_password(req.password))
     token = _create_jwt_token()
     return {"success": True, "token": token}
 
 
 @router.post("/login")
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, db=Depends(get_db)):
     """
     伪装登录接口：
     - req.username -> 实际的管理密码
@@ -115,7 +114,7 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not req.username:
         raise HTTPException(status_code=401, detail="请输入账号")
 
-    pw_hash = await _get_setting(db, "admin_password")
+    pw_hash = _get_setting(db, "admin_password")
     if not pw_hash:
         raise HTTPException(status_code=500, detail="系统未初始化")
 

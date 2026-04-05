@@ -11,7 +11,6 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 
-from app.models import init_db
 from app.api.admin import router as admin_router, validate_token
 from app.api.auth import router as auth_router
 from app.api.vip import router as vip_router

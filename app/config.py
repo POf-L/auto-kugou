@@ -12,11 +12,10 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 # 数据库: 优先使用 Turso (libSQL)，回退到本地 SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-if DATABASE_URL:
-    # Turso URL 格式: libsql+https://xxx.turso.io 或 mysql+...
-    pass
-else:
-    DATABASE_URL = "sqlite+aiosqlite:///./data/kugou.db"
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+if not DATABASE_URL:
+    # 本地 SQLite 默认路径
+    DATABASE_URL = "sqlite:///./data/kugou.db"
 
 TOKEN_REFRESH_INTERVAL = int(os.getenv("TOKEN_REFRESH_INTERVAL", 5400))
 VIP_CHECK_INTERVAL = int(os.getenv("VIP_CHECK_INTERVAL", 3600))
