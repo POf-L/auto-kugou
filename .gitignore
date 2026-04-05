@@ -1,0 +1,44 @@
+﻿# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Database (Vercel uses env DATABASE_URL)
+data/*.db
+
+# Environment
+.env
+.env.local
+
+# Test files
+test_*.py
+
+# Logs
+*.log
+
+# WorkBuddy
+.workbuddy/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# EchoMusic reference project (not needed for deployment)
+EchoMusic/

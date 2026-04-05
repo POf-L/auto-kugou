@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>酷狗VIP自动领取工具</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --kugou-blue: #1890ff; --kugou-gold: #f5a623; }
+    body { background: linear-gradient(135deg, #0f0c29, #302b63, #24243e); min-height: 100vh; }
+    .glass { background: rgba(255,255,255,0.07); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.12); }
+    .glass-dark { background: rgba(0,0,0,0.25); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+    .tab-btn { transition: all 0.25s ease; }
+    .tab-btn.active { background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; box-shadow: 0 4px 15px rgba(102,126,234,0.4); }
+    .vip-badge-0 { background: linear-gradient(135deg, #6b7280, #4b5563); }
+    .vip-badge-1 { background: linear-gradient(135deg, #f5a623, #e89615); }
+    .vip-badge-2 { background: linear-gradient(135deg, #a855f7, #7c3aed); }
+    .vip-badge-3 { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+    .btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); transition: all 0.2s; }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(102,126,234,0.4); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-success { background: linear-gradient(135deg, #10b981, #059669); }
+    .btn-success:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(16,185,129,0.4); }
+    .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
+    .btn-danger:hover { transform: translateY(-1px); }
+    .log-item-success { border-left: 3px solid #10b981; }
+    .log-item-failed { border-left: 3px solid #ef4444; }
+    .log-item-skipped { border-left: 3px solid #f59e0b; }
+    .pulse-dot { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    .fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    input { background: rgba(255,255,255,0.08) !important; border: 1px solid rgba(255,255,255,0.15) !important; color: #e2e8f0 !important; }
+    input::placeholder { color: rgba(255,255,255,0.3) !important; }
+    input:focus { outline: none !important; border-color: rgba(102,126,234,0.6) !important; box-shadow: 0 0 0 3px rgba(102,126,234,0.15) !important; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+    .qr-container { min-height: 220px; display: flex; align-items: center; justify-content: center; }
+    .account-card { transition: all 0.2s; }
+    .account-card:hover { transform: translateY(-2px); }
+    .toast { position: fixed; top: 20px; right: 20px; z-index: 9999; min-width: 260px; max-width: 400px; }
+    /* 伪装登录层 */
+    #auth-overlay { position: fixed; inset: 0; z-index: 10000; background: linear-gradient(135deg, #0f0c29, #302b63, #24243e); display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body class="text-white font-sans">
+
+<!-- ===== 伪装登录层（覆盖在主页面之上） ===== -->
+<div id="auth-overlay">
+  <!-- Toast 通知（登录层独享） -->
+  <div id="toast-container" class="toast space-y-2"></div>
+
+  <div class="w-full max-w-sm mx-4">
+    <!-- 看起来像系统登录页面 -->
+    <div class="text-center mb-8">
+      <h1 class="text-2xl font-bold text-white">系统登录</h1>
+      <p class="text-gray-400 text-sm mt-1">请输入账号和密码以继续</p>
+    </div>
+
+    <div class="glass rounded-2xl p-6 space-y-4">
+      <!-- 首次设置模式（隐藏，JS 控制显示） -->
+      <div id="setup-mode" class="hidden">
+        <p class="text-yellow-300 text-xs mb-3 text-center">🔒 首次使用，请设置管理密码</p>
+        <input id="setup-password" type="password" placeholder="设置管理密码（至少4位）"
+          class="w-full px-4 py-3 rounded-xl text-sm" />
+        <input id="setup-password2" type="password" placeholder="确认密码"
+          class="w-full px-4 py-3 rounded-xl text-sm" />
+        <button onclick="doSetup()" id="btn-setup"
+          class="btn-primary w-full py-3 rounded-xl text-sm font-semibold">
+          确认设置
+        </button>
+      </div>
+
+      <!-- 正常登录模式（默认显示） -->
+      <div id="login-mode">
+        <input id="login-username" type="text" placeholder="账号"
+          class="w-full px-4 py-3 rounded-xl text-sm" autocomplete="username" />
+        <input id="login-password" type="password" placeholder="密码"
+          class="w-full px-4 py-3 rounded-xl text-sm" autocomplete="current-password" />
+        <p id="login-error" class="text-red-400 text-xs hidden"></p>
+        <button onclick="doLogin()" id="btn-login"
+          class="btn-primary w-full py-3 rounded-xl text-sm font-semibold">
+          登 录
+        </button>
+      </div>
+
+      <p class="text-center text-gray-500 text-xs mt-4">v1.0.0 · 酷狗音乐工具</p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 主应用层（登录前隐藏） ===== -->
+<div id="app-layer" class="hidden">
+
+<!-- Toast 通知 -->
+<div id="toast-container" class="toast space-y-2"></div>
+
+<!-- 主容器 -->
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  <!-- 顶部标题 -->
+  <div class="text-center mb-8">
+    <h1 class="text-4xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
+      🎵 酷狗VIP自动领取工具
+    </h1>
+    <p class="text-gray-400 mt-2 text-sm">支持多账号管理 · 每日自动签到(畅听+概念VIP) · 实时进度推送</p>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- 左侧：登录面板 -->
+    <div class="lg:col-span-1">
+      <div class="glass rounded-2xl p-5">
+        <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+          <span>🔐</span><span>账号登录</span>
+        </h2>
+
+        <!-- 登录方式选择 -->
+        <div class="flex gap-1 mb-5 bg-black/20 rounded-xl p-1">
+          <button onclick="switchTab('password')" id="tab-password" class="tab-btn active flex-1 py-2 px-1 rounded-lg text-xs font-medium text-center">
+            密码
+          </button>
+          <button onclick="switchTab('sms')" id="tab-sms" class="tab-btn flex-1 py-2 px-1 rounded-lg text-xs font-medium text-center text-gray-400">
+            验证码
+          </button>
+          <button onclick="switchTab('qrcode')" id="tab-qrcode" class="tab-btn flex-1 py-2 px-1 rounded-lg text-xs font-medium text-center text-gray-400">
+            扫码
+          </button>
+        </div>
+
+        <!-- 密码登录 -->
+        <div id="panel-password" class="space-y-3">
+          <input id="pw-username" type="text" placeholder="手机号 / 用户名 / 邮箱"
+            class="w-full px-4 py-3 rounded-xl text-sm" />
+          <input id="pw-password" type="password" placeholder="密码"
+            class="w-full px-4 py-3 rounded-xl text-sm" />
+          <button onclick="loginByPassword()" id="btn-pw-login"
+            class="btn-primary w-full py-3 rounded-xl text-sm font-semibold">
+            登 录
+          </button>
+        </div>
+
+        <!-- 验证码登录 -->
+        <div id="panel-sms" class="space-y-3 hidden">
+          <input id="sms-mobile" type="text" placeholder="手机号"
+            class="w-full px-4 py-3 rounded-xl text-sm" />
+          <div class="flex gap-2">
+            <input id="sms-code" type="text" placeholder="验证码"
+              class="flex-1 px-4 py-3 rounded-xl text-sm" />
+            <button onclick="sendSmsCode()" id="btn-send-sms"
+              class="btn-primary px-3 py-2 rounded-xl text-xs font-medium whitespace-nowrap min-w-[80px]">
+              发送
+            </button>
+          </div>
+          <button onclick="loginBySms()" id="btn-sms-login"
+            class="btn-primary w-full py-3 rounded-xl text-sm font-semibold">
+            登 录
+          </button>
+        </div>
+
+        <!-- 二维码登录 -->
+        <div id="panel-qrcode" class="hidden">
+          <div class="qr-container glass-dark rounded-xl mb-3" id="qr-display">
+            <div class="text-center">
+              <button onclick="loadQrcode()" class="btn-primary px-6 py-3 rounded-xl text-sm font-semibold">
+                点击获取二维码
+              </button>
+            </div>
+          </div>
+          <p id="qr-status-text" class="text-center text-xs text-gray-400">请点击获取二维码</p>
+          <button onclick="loadQrcode()" id="btn-refresh-qr"
+            class="w-full mt-3 py-2 rounded-xl text-xs font-medium glass text-gray-300 hover:text-white transition-colors">
+            刷新二维码
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧：账号列表 + 操作区 -->
+    <div class="lg:col-span-2 space-y-4">
+
+      <!-- 全局操作按钮 -->
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-base font-semibold mb-3 flex items-center gap-2">
+          <span>⚡</span><span>批量操作</span>
+        </h2>
+        <div class="flex gap-3 flex-wrap">
+          <button onclick="signInAll()" class="btn-success px-5 py-2.5 rounded-xl text-sm font-semibold text-white">
+            ✅ 一键全部领取VIP
+          </button>
+          <button onclick="refreshTokenAll()" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-semibold">
+            🔄 刷新全部Token
+          </button>
+          <button onclick="loadAccounts()" class="glass px-5 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:text-white transition-colors">
+            📋 刷新账号列表
+          </button>
+        </div>
+      </div>
+
+      <!-- 账号列表 -->
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-base font-semibold mb-3 flex items-center gap-2">
+          <span>👥</span><span>已登录账号</span>
+          <span id="account-count" class="text-xs text-gray-400 font-normal ml-1">(0)</span>
+        </h2>
+        <div id="accounts-list" class="space-y-3 min-h-[80px] flex flex-col items-center justify-center">
+          <p class="text-gray-500 text-sm">暂无登录账号</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 进度日志面板 -->
+  <div class="glass rounded-2xl p-5 mt-6">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-base font-semibold flex items-center gap-2">
+        <span class="relative flex h-2.5 w-2.5">
+          <span class="pulse-dot animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+        </span>
+        <span>实时进度日志</span>
+      </h2>
+      <button onclick="clearLogs()" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">清空</button>
+    </div>
+    <div id="log-panel" class="space-y-2 max-h-64 overflow-y-auto pr-1">
+      <p class="text-gray-500 text-xs text-center py-4">等待事件...</p>
+    </div>
+  </div>
+
+</div><!-- /app-layer -->
+
+<!-- 签到详情模态框 -->
+<div id="modal-detail" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center" onclick="closeModal()">
+  <div class="glass rounded-2xl p-6 max-w-md w-full mx-4 fade-in" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-semibold text-base" id="modal-title">账号详情</h3>
+      <button onclick="closeModal()" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+    </div>
+    <div id="modal-body" class="space-y-3"></div>
+  </div>
+</div>
+
+<script>
+// ========== 管理员认证 ==========
+let authToken = localStorage.getItem('auth_token') || '';
+
+async function checkAuth() {
+  const overlay = document.getElementById('auth-overlay');
+  const appLayer = document.getElementById('app-layer');
+
+  // 如果本地有 token，尝试验证
+  if (authToken) {
+    try {
+      const r = await fetch('/api/auth/accounts', { headers: { 'Authorization': `Bearer ${authToken}` } });
+      if (r.ok) {
+        // token 有效，直接进入主界面
+        overlay.classList.add('hidden');
+        appLayer.classList.remove('hidden');
+        initApp();
+        return;
+      }
+    } catch {}
+    localStorage.removeItem('auth_token');
+    authToken = '';
+  }
+
+  // 检查是否首次使用（未设置密码）
+  try {
+    const r = await fetch('/api/admin/status');
+    const data = await r.json();
+    if (!data.initialized) {
+      // 显示设置密码界面
+      document.getElementById('setup-mode').classList.remove('hidden');
+      document.getElementById('login-mode').classList.add('hidden');
+    }
+  } catch {}
+
+  // 绑定登录层的回车事件
+  document.getElementById('login-password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doLogin();
+  });
+  document.getElementById('setup-password2').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doSetup();
+  });
+}
+
+async function doSetup() {
+  const pw = document.getElementById('setup-password').value;
+  const pw2 = document.getElementById('setup-password2').value;
+  if (!pw || pw.length < 4) {
+    return showLoginError('密码长度不能少于4位');
+  }
+  if (pw !== pw2) {
+    return showLoginError('两次密码不一致');
+  }
+  const btn = document.getElementById('btn-setup');
+  btn.disabled = true; btn.textContent = '设置中...';
+  try {
+    const r = await fetch('/api/admin/setup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    });
+    const data = await r.json();
+    if (data.success) {
+      authToken = data.token;
+      localStorage.setItem('auth_token', authToken);
+      enterApp();
+    } else {
+      showLoginError(data.detail || '设置失败');
+    }
+  } catch {
+    showLoginError('网络错误');
+  }
+  btn.disabled = false; btn.textContent = '确认设置';
+}
+
+async function doLogin() {
+  const username = document.getElementById('login-username').value;
+  const password = document.getElementById('login-password').value;
+  // 密码框有内容就直接报错（伪装）
+  if (password) {
+    showLoginError('账号或密码错误');
+    return;
+  }
+  if (!username) {
+    showLoginError('请输入账号');
+    return;
+  }
+  const btn = document.getElementById('btn-login');
+  btn.disabled = true; btn.textContent = '验证中...';
+  try {
+    const r = await fetch('/api/admin/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: '' })
+    });
+    const data = await r.json();
+    if (data.success) {
+      authToken = data.token;
+      localStorage.setItem('auth_token', authToken);
+      enterApp();
+    } else {
+      showLoginError(data.detail || '账号或密码错误');
+    }
+  } catch {
+    showLoginError('网络错误');
+  }
+  btn.disabled = false; btn.textContent = '登 录';
+}
+
+function showLoginError(msg) {
+  const el = document.getElementById('login-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 5000);
+}
+
+function enterApp() {
+  document.getElementById('auth-overlay').classList.add('hidden');
+  document.getElementById('app-layer').classList.remove('hidden');
+  initApp();
+}
+
+function logout() {
+  authToken = '';
+  localStorage.removeItem('auth_token');
+  location.reload();
+}
+
+// ========== 主应用初始化 ==========
+function initApp() {
+  loadAccounts();
+  connectSSE();
+
+  // 回车键触发登录
+  document.getElementById('pw-password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loginByPassword();
+  });
+  document.getElementById('sms-code').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loginBySms();
+  });
+}
+
+// ========== 全局状态 ==========
+let qrPollingTimer = null;
+let currentQrKey = '';
+let smsCountdown = 0;
+let smsTimer = null;
+let eventSource = null;
+
+// ========== 工具函数 ==========
+function toast(message, type = 'info') {
+  const colors = { success: 'bg-green-500', error: 'bg-red-500', info: 'bg-blue-500', warn: 'bg-yellow-500' };
+  const icons = { success: '✅', error: '❌', info: 'ℹ️', warn: '⚠️' };
+  const el = document.createElement('div');
+  el.className = `${colors[type] || colors.info} text-white px-4 py-3 rounded-xl shadow-xl text-sm fade-in flex items-start gap-2`;
+  el.innerHTML = `<span>${icons[type]}</span><span>${message}</span>`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+async function api(method, url, body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(url, opts);
+  if (r.status === 401) {
+    // token 过期，跳转到登录
+    logout();
+    throw new Error('登录已过期');
+  }
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+function setLoading(btnId, loading, text = '') {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = loading;
+  if (loading) btn.dataset.origText = btn.textContent;
+  btn.textContent = loading ? (text || '处理中...') : btn.dataset.origText;
+  btn.style.opacity = loading ? '0.7' : '1';
+}
+
+function vipBadge(vipType) {
+  const labels = { 0: '普通用户', 1: 'VIP会员', 2: '超级VIP', 3: '豪华VIP' };
+  const cls = `vip-badge-${Math.min(vipType, 3)}`;
+  return `<span class="${cls} text-white text-xs px-2 py-0.5 rounded-full font-medium">${labels[vipType] || `VIP${vipType}`}</span>`;
+}
+
+function busiVipBadges(activeVips) {
+  if (!activeVips || activeVips.length === 0) return '';
+  return activeVips.map(v => {
+    const labels = { svip: '概念VIP', tvip: '畅听VIP', qvip: 'QQ音乐VIP', dvip: '豪华VIP' };
+    const colors = { svip: 'background:linear-gradient(135deg,#f59e0b,#d97706)', tvip: 'background:linear-gradient(135deg,#10b981,#059669)', qvip: 'background:linear-gradient(135deg,#22c55e,#16a34a)', dvip: 'background:linear-gradient(135deg,#ef4444,#dc2626)' };
+    const label = labels[v.product_type] || v.label || v.product_type;
+    const style = colors[v.product_type] || 'background:#6b7280';
+    return `<span class="text-white text-xs px-2 py-0.5 rounded-full font-medium" style="${style}">${label}</span>`;
+  }).join(' ');
+}
+
+function loginTypeBadge(type) {
+  const map = { password: '密码', sms: '验证码', qrcode: '扫码', token: 'Token' };
+  return `<span class="text-xs text-gray-400">[${map[type] || type}]</span>`;
+}
+
+// ========== 登录Tab切换 ==========
+function switchTab(tab) {
+  ['password', 'sms', 'qrcode'].forEach(t => {
+    document.getElementById(`panel-${t}`).classList.add('hidden');
+    document.getElementById(`tab-${t}`).classList.remove('active');
+    document.getElementById(`tab-${t}`).classList.add('text-gray-400');
+  });
+  document.getElementById(`panel-${tab}`).classList.remove('hidden');
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  document.getElementById(`tab-${tab}`).classList.remove('text-gray-400');
+
+  if (tab === 'qrcode') {
+    // 切换到扫码时自动加载二维码
+    loadQrcode();
+  } else {
+    // 离开扫码Tab时停止轮询
+    stopQrPolling();
+  }
+}
+
+// ========== 密码登录 ==========
+async function loginByPassword() {
+  const username = document.getElementById('pw-username').value.trim();
+  const password = document.getElementById('pw-password').value;
+  if (!username || !password) return toast('请输入账号和密码', 'warn');
+  setLoading('btn-pw-login', true, '登录中...');
+  try {
+    const res = await api('POST', '/api/auth/login/password', { username, password });
+    if (res.success) {
+      toast(`登录成功！欢迎 ${res.nickname || res.userid}`, 'success');
+      document.getElementById('pw-password').value = '';
+      loadAccounts();
+    } else {
+      toast(res.message || '登录失败', 'error');
+    }
+  } catch(e) {
+    toast('请求失败: ' + e.message, 'error');
+  }
+  setLoading('btn-pw-login', false);
+}
+
+// ========== 短信验证码登录 ==========
+async function sendSmsCode() {
+  const mobile = document.getElementById('sms-mobile').value.trim();
+  if (!mobile || mobile.length !== 11) return toast('请输入正确的手机号', 'warn');
+  if (smsCountdown > 0) return;
+  setLoading('btn-send-sms', true, '发送中...');
+  try {
+    const res = await api('POST', '/api/auth/login/sms/send', { mobile });
+    if (res.success) {
+      toast('验证码已发送，请注意查收', 'success');
+      startSmsCountdown();
+    } else {
+      toast(res.message || '发送失败', 'error');
+    }
+  } catch(e) {
+    toast('发送失败: ' + e.message, 'error');
+  }
+  setLoading('btn-send-sms', false);
+}
+
+function startSmsCountdown() {
+  smsCountdown = 60;
+  const btn = document.getElementById('btn-send-sms');
+  smsTimer = setInterval(() => {
+    smsCountdown--;
+    btn.textContent = `${smsCountdown}s`;
+    btn.disabled = true;
+    if (smsCountdown <= 0) {
+      clearInterval(smsTimer);
+      btn.textContent = '发送';
+      btn.disabled = false;
+    }
+  }, 1000);
+}
+
+async function loginBySms() {
+  const mobile = document.getElementById('sms-mobile').value.trim();
+  const code = document.getElementById('sms-code').value.trim();
+  if (!mobile || !code) return toast('请输入手机号和验证码', 'warn');
+  setLoading('btn-sms-login', true, '验证中...');
+  try {
+    const res = await api('POST', '/api/auth/login/sms', { mobile, code });
+    if (res.success) {
+      toast(`登录成功！欢迎 ${res.nickname || res.userid}`, 'success');
+      document.getElementById('sms-code').value = '';
+      loadAccounts();
+    } else {
+      toast(res.message || '登录失败', 'error');
+    }
+  } catch(e) {
+    toast('请求失败: ' + e.message, 'error');
+  }
+  setLoading('btn-sms-login', false);
+}
+
+// ========== 二维码登录 ==========
+async function loadQrcode() {
+  stopQrPolling();
+  const display = document.getElementById('qr-display');
+  display.innerHTML = '<div class="text-gray-400 text-sm">加载中...</div>';
+  document.getElementById('qr-status-text').textContent = '正在获取二维码...';
+  try {
+    const res = await api('GET', '/api/auth/login/qrcode');
+    if (res.success) {
+      currentQrKey = res.key;
+      display.innerHTML = `<img src="${res.qrcode_image}" alt="登录二维码" class="w-48 h-48 rounded-lg" />`;
+      document.getElementById('qr-status-text').textContent = '请用酷狗APP扫描二维码';
+      startQrPolling();
+    } else {
+      display.innerHTML = `<p class="text-red-400 text-sm px-4 text-center">${res.message}</p>`;
+      document.getElementById('qr-status-text').textContent = '获取失败，请重试';
+    }
+  } catch(e) {
+    display.innerHTML = `<p class="text-red-400 text-sm">加载失败: ${e.message}</p>`;
+  }
+}
+
+function startQrPolling() {
+  qrPollingTimer = setInterval(async () => {
+    if (!currentQrKey) return;
+    try {
+      const res = await api('POST', '/api/auth/login/qrcode/check', { key: currentQrKey });
+      const statusEl = document.getElementById('qr-status-text');
+      if (res.qr_status === 'success') {
+        stopQrPolling();
+        toast(`扫码登录成功！欢迎 ${res.nickname || res.userid}`, 'success');
+        statusEl.textContent = '✅ 登录成功！';
+        document.getElementById('qr-display').innerHTML = '<div class="text-green-400 text-2xl">✅ 已登录</div>';
+        loadAccounts();
+      } else if (res.qr_status === 'expired') {
+        stopQrPolling();
+        statusEl.textContent = '⚠️ 二维码已过期，请刷新';
+      } else if (res.qr_status === 'scanned') {
+        statusEl.textContent = '📱 已扫描，请在手机上确认登录';
+      } else {
+        statusEl.textContent = '⏳ 等待扫描...';
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+function stopQrPolling() {
+  if (qrPollingTimer) { clearInterval(qrPollingTimer); qrPollingTimer = null; }
+}
+
+// ========== 账号列表 ==========
+async function loadAccounts() {
+  try {
+    const accounts = await api('GET', '/api/auth/accounts');
+    const container = document.getElementById('accounts-list');
+    document.getElementById('account-count').textContent = `(${accounts.length})`;
+
+    if (accounts.length === 0) {
+      container.innerHTML = '<p class="text-gray-500 text-sm py-4">暂无登录账号，请先登录</p>';
+      return;
+    }
+
+    container.innerHTML = accounts.map(acc => `
+      <div class="account-card glass-dark rounded-xl p-4 fade-in" id="card-${acc.userid}">
+        <div class="flex items-center gap-3">
+          <!-- 头像 -->
+          <div class="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-lg font-bold flex-shrink-0 overflow-hidden">
+            ${acc.avatar
+              ? `<img src="${acc.avatar}" class="w-full h-full object-cover" onerror="this.parentElement.textContent='${(acc.nickname||'?')[0]}'" />`
+              : (acc.nickname || '?')[0]}
+          </div>
+          <!-- 信息 -->
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-medium text-sm truncate">${acc.nickname || acc.userid}</span>
+              ${busiVipBadges(acc.active_vips)}
+              ${loginTypeBadge(acc.login_type)}
+            </div>
+            <div class="text-xs text-gray-500 mt-0.5">
+              ID: ${acc.userid} ${acc.mobile ? '· ' + acc.mobile : ''}
+            </div>
+            <div class="text-xs text-gray-500 flex items-center gap-2">
+              <span>上次签到: ${acc.last_claim_time || '从未'}</span>
+              ${acc.vip_expire ? `<span>· VIP到期: ${acc.vip_expire}</span>` : ''}
+            </div>
+          </div>
+          <!-- 操作按钮 -->
+          <div class="flex flex-col gap-1.5 flex-shrink-0">
+            <button onclick="manualSignIn('${acc.userid}')" title="领取今日VIP"
+              class="btn-success text-white text-xs px-3 py-1.5 rounded-lg font-medium">
+              领取VIP
+            </button>
+            <button onclick="showDetail('${acc.userid}')" title="查看详情"
+              class="glass text-gray-300 text-xs px-3 py-1.5 rounded-lg font-medium hover:text-white transition-colors">
+              详情
+            </button>
+          </div>
+        </div>
+        <!-- 自动签到开关 -->
+        <div class="flex items-center justify-between mt-3 pt-3 border-t border-white/5">
+          <span class="text-xs text-gray-400">自动每日领取VIP</span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs ${acc.auto_claim ? 'text-green-400' : 'text-gray-500'}">${acc.auto_claim ? '已开启' : '已关闭'}</span>
+            <button onclick="toggleAutoClaim('${acc.userid}', this)"
+              class="${acc.auto_claim ? 'bg-green-500' : 'bg-gray-600'} relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+              data-enabled="${acc.auto_claim}">
+              <span class="${acc.auto_claim ? 'translate-x-5' : 'translate-x-1'} inline-block h-3 w-3 transform rounded-full bg-white transition-transform"></span>
+            </button>
+            <button onclick="removeAccount('${acc.userid}')" title="移除账号"
+              class="text-gray-600 hover:text-red-400 transition-colors text-xs ml-1">✕</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    toast('加载账号失败: ' + e.message, 'error');
+  }
+}
+
+// ========== VIP 操作 ==========
+async function manualSignIn(userid) {
+  try {
+    const res = await api('POST', `/api/vip/sign-in/${userid}`);
+    if (res.success) {
+      if (res.skipped) {
+        toast(res.message, 'warn');
+      } else {
+        // 区分畅听VIP和概念VIP的签到结果
+        const parts = [];
+        if (res.tvip_success) parts.push('<span style="color:#10b981">✅ 畅听VIP</span>');
+        else parts.push('<span style="color:#ef4444">❌ 畅听VIP</span>');
+        if (res.svip_success) parts.push('<span style="color:#f59e0b">✅ 概念VIP</span>');
+        else parts.push('<span style="color:#ef4444">❌ 概念VIP</span>');
+        toast(`签到完成: ${parts.join(' ')}`, 'success');
+      }
+    } else {
+      toast(res.message || '签到失败', 'error');
+    }
+    loadAccounts();
+  } catch(e) {
+    toast('签到请求失败: ' + e.message, 'error');
+  }
+}
+
+async function signInAll() {
+  toast('已触发全部账号签到，请查看日志', 'info');
+  try {
+    await api('POST', '/api/vip/sign-in-all');
+    setTimeout(loadAccounts, 3000);
+  } catch(e) {
+    toast('请求失败: ' + e.message, 'error');
+  }
+}
+
+async function refreshTokenAll() {
+  toast('已触发Token刷新，请查看日志', 'info');
+  try {
+    await api('POST', '/api/vip/refresh-token-all');
+  } catch(e) {
+    toast('请求失败: ' + e.message, 'error');
+  }
+}
+
+async function toggleAutoClaim(userid, btn) {
+  try {
+    const res = await api('POST', `/api/auth/accounts/${userid}/toggle_auto_claim`);
+    if (res.success) {
+      toast(`自动签到已${res.auto_claim ? '开启' : '关闭'}`, 'success');
+      loadAccounts();
+    }
+  } catch(e) {
+    toast('操作失败: ' + e.message, 'error');
+  }
+}
+
+async function removeAccount(userid) {
+  if (!confirm('确定要移除该账号吗？')) return;
+  try {
+    await api('DELETE', `/api/auth/accounts/${userid}`);
+    toast('账号已移除', 'success');
+    loadAccounts();
+  } catch(e) {
+    toast('移除失败: ' + e.message, 'error');
+  }
+}
+
+// ========== 详情模态框 ==========
+async function showDetail(userid) {
+  document.getElementById('modal-detail').classList.remove('hidden');
+  document.getElementById('modal-title').textContent = `账号详情 · ${userid}`;
+  const body = document.getElementById('modal-body');
+  body.innerHTML = '<p class="text-gray-400 text-sm text-center py-4">加载中...</p>';
+
+  try {
+    const [vipRes, signRes, logsRes] = await Promise.all([
+      api('GET', `/api/vip/status/${userid}`).catch(() => null),
+      api('GET', `/api/vip/sign-info/${userid}`).catch(() => null),
+      api('GET', `/api/vip/logs/${userid}?limit=10`).catch(() => []),
+    ]);
+
+    body.innerHTML = `
+      <!-- VIP状态 -->
+      <div class="glass-dark rounded-xl p-3">
+        <p class="text-xs text-gray-400 mb-2">VIP状态</p>
+        ${vipRes?.success
+          ? `<div class="flex items-center gap-2 flex-wrap">${busiVipBadges(vipRes.active_vips)}<span class="text-xs text-gray-300">${vipRes.expire_time ? '到期: ' + vipRes.expire_time : ''}</span></div>`
+          : `<p class="text-xs text-red-400">获取失败</p>`}
+      </div>
+      <!-- 签到状态 -->
+      <div class="glass-dark rounded-xl p-3">
+        <p class="text-xs text-gray-400 mb-2">签到状态</p>
+        ${signRes
+          ? `<div class="flex items-center gap-3 text-xs">
+               <span class="${signRes.signed_today ? 'text-green-400' : 'text-yellow-400'}">${signRes.signed_today ? '✅ 今日已签到' : '⏳ 今日未签到'}</span>
+               <span class="text-gray-400">连续 ${signRes.continuous_days} 天</span>
+               ${signRes.reward_desc ? `<span class="text-blue-300">${signRes.reward_desc}</span>` : ''}
+             </div>`
+          : '<p class="text-xs text-gray-500">获取失败</p>'}
+      </div>
+      <!-- 最近日志 -->
+      <div class="glass-dark rounded-xl p-3">
+        <p class="text-xs text-gray-400 mb-2">最近领取记录</p>
+        <div class="space-y-1.5 max-h-40 overflow-y-auto">
+          ${logsRes.length === 0
+            ? '<p class="text-xs text-gray-500 text-center py-2">暂无记录</p>'
+            : logsRes.map(log => `
+              <div class="log-item-${log.status} pl-2 py-1">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs ${log.status === 'success' ? 'text-green-400' : log.status === 'skipped' ? 'text-yellow-400' : 'text-red-400'}">${log.message}</span>
+                  <span class="text-gray-600 text-xs ml-2 flex-shrink-0">${log.created_at}</span>
+                </div>
+              </div>`).join('')}
+        </div>
+      </div>
+      <button onclick="manualSignIn('${userid}'); closeModal();"
+        class="btn-success w-full py-2.5 rounded-xl text-sm font-semibold text-white mt-1">
+        领取今日VIP
+      </button>
+    `;
+  } catch(e) {
+    body.innerHTML = `<p class="text-red-400 text-sm">加载失败: ${e.message}</p>`;
+  }
+}
+
+function closeModal() {
+  document.getElementById('modal-detail').classList.add('hidden');
+}
+
+// ========== 进度日志 ==========
+function appendLog(event) {
+  const panel = document.getElementById('log-panel');
+  const isEmpty = panel.querySelector('.text-center');
+  if (isEmpty) panel.innerHTML = '';
+
+  const typeColors = {
+    login_success: 'text-green-400',
+    sign_in_success: 'text-green-400',
+    sign_in_failed: 'text-red-400',
+    sign_in_start: 'text-blue-400',
+    token_refresh: 'text-yellow-400',
+    token_refresh_failed: 'text-red-400',
+    tvip_claim: 'text-green-400',
+    svip_claim: 'text-yellow-400',
+  };
+  const typeIcons = {
+    login_success: '🔑',
+    sign_in_success: '✅',
+    sign_in_failed: '❌',
+    sign_in_start: '🔄',
+    token_refresh: '♻️',
+    token_refresh_failed: '⚠️',
+    tvip_claim: '🎵',
+    svip_claim: '👑',
+  };
+
+  const color = typeColors[event.type] || 'text-gray-300';
+  const icon = typeIcons[event.type] || 'ℹ️';
+
+  const el = document.createElement('div');
+  el.className = 'flex items-start gap-2 text-xs py-1.5 border-b border-white/5 fade-in';
+  el.innerHTML = `
+    <span class="flex-shrink-0 text-gray-500">${event.timestamp}</span>
+    <span class="flex-shrink-0">${icon}</span>
+    <span class="${color} flex-1">${event.message}</span>
+    ${event.userid ? `<span class="text-gray-600 flex-shrink-0 truncate max-w-[80px]" title="${event.userid}">${event.userid.slice(-6)}</span>` : ''}
+  `;
+  panel.insertBefore(el, panel.firstChild);
+
+  // 最多显示50条
+  while (panel.children.length > 50) panel.removeChild(panel.lastChild);
+}
+
+function clearLogs() {
+  document.getElementById('log-panel').innerHTML = '<p class="text-gray-500 text-xs text-center py-4">日志已清空</p>';
+}
+
+// ========== SSE 事件流 ==========
+function connectSSE() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`/api/vip/events?token=${authToken}`);
+  eventSource.onmessage = (e) => {
+    try {
+      const event = JSON.parse(e.data);
+      appendLog(event);
+      // 登录成功或签到成功后刷新账号列表
+      if (['login_success', 'sign_in_success', 'sign_in_failed'].includes(event.type)) {
+        setTimeout(loadAccounts, 500);
+      }
+    } catch {}
+  };
+  eventSource.onerror = () => {
+    setTimeout(connectSSE, 5000); // 断线重连
+  };
+}
+
+// ========== 页面初始化 ==========
+document.addEventListener('DOMContentLoaded', () => {
+  checkAuth();
+});
+</script>
+</body>
+</html>
