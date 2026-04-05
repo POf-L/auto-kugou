@@ -1,12 +1,12 @@
 """
 数据库模型定义
-支持 Turso (libSQL) 和本地 SQLite 双模式
+支持 Vercel Postgres (Neon) 和本地 SQLite 双模式
 使用同步 SQLAlchemy（Serverless 兼容）
 """
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-from app.config import DATABASE_URL, TURSO_AUTH_TOKEN
+from app.config import DATABASE_URL
 
 # 中国时区 UTC+8
 _CST = timezone(timedelta(hours=8))
@@ -76,23 +76,11 @@ class ProgressEvent(Base):
 
 
 # ========== 数据库引擎 ==========
-_is_turso = DATABASE_URL.startswith("libsql://") or "turso.io" in DATABASE_URL
-
-if _is_turso:
-    # Turso / libSQL 模式（远程连接）
-    # 使用 sqlalchemy-libsql 方言: sqlite+libsql://<url>?secure=true
-    if DATABASE_URL.startswith("http"):
-        # 原始 URL 格式: https://xxx.turso.io
-        sql_url = f"sqlite+libsql://{DATABASE_URL}?secure=true"
-    else:
-        sql_url = DATABASE_URL.replace("libsql://", "sqlite+libsql://", 1)
-        if "secure=true" not in sql_url:
-            sql_url += "?secure=true" if "?" not in sql_url else "&secure=true"
-
-    engine = create_engine(
-        sql_url,
-        connect_args={"auth_token": TURSO_AUTH_TOKEN} if TURSO_AUTH_TOKEN else {},
-    )
+if DATABASE_URL.startswith(("postgres://", "postgresql://")):
+    # Vercel Postgres (Neon) 模式
+    # Neon 的 pgbouncer 端口需要 pool_size=1 避免 prepared statement 错误
+    url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    engine = create_engine(url, pool_size=1, pool_recycle=300)
 else:
     # 本地 SQLite 模式
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})

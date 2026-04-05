@@ -10,9 +10,8 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 8000))
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
-# 数据库: 优先使用 Turso (libSQL)，回退到本地 SQLite
+# 数据库: 优先使用 Vercel Postgres，回退到本地 SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 if not DATABASE_URL:
     # 本地 SQLite 默认路径
     DATABASE_URL = "sqlite:///./data/kugou.db"
