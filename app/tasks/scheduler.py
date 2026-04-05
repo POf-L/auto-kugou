@@ -3,7 +3,7 @@
 
 改造要点：
 - 去掉 APScheduler，所有进度事件存入数据库
-- Vercel Cron 触发 /api/cron/sign-in 和 /api/cron/refresh-token
+- 由外部计划任务触发 /api/vip/cron/sign-in 和 /api/vip/cron/refresh-token
 - 进度事件通过数据库轮询获取
 - 数据库操作使用同步 Session
 """
@@ -16,6 +16,15 @@ from app.models import SessionLocal, Account, ProgressEvent
 
 _CST = timezone(timedelta(hours=8))
 MAX_EVENTS = 100
+
+
+def _ensure_cst(dt: datetime | None) -> datetime | None:
+    """把数据库读出的时间统一转换到中国时区，兼容 naive/aware datetime"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_CST)
+    return dt.astimezone(_CST)
 
 
 async def emit_event(event_type: str, userid: str, message: str, data: dict = None):
@@ -96,7 +105,8 @@ async def refresh_all_tokens():
             if not acc.token or not acc.userid:
                 continue
             if acc.last_token_refresh:
-                elapsed = (datetime.now(_CST) - acc.last_token_refresh).total_seconds()
+                last_refresh = _ensure_cst(acc.last_token_refresh)
+                elapsed = (datetime.now(_CST) - last_refresh).total_seconds()
                 if elapsed < 5400:
                     continue
             try:
