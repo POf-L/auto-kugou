@@ -2,22 +2,18 @@
 VIP 相关 API 路由
 """
 import asyncio
-import json
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.models import get_db, Account
+from app.models import get_db, Account, init_db
 from app.services import vip_service
-from app.tasks.scheduler import progress_events, emit_event, _auto_sign_all, _refresh_all_tokens
+from app.tasks.scheduler import emit_event, auto_sign_all, refresh_all_tokens, get_recent_events
+from app.config import CRON_SECRET
 
 
 router = APIRouter(prefix="/api/vip", tags=["vip"])
-
-
-def _get_account_by_userid(accounts, userid: str):
-    return next((a for a in accounts if a.userid == userid), None)
 
 
 @router.get("/status/{userid}")
@@ -58,27 +54,29 @@ async def manual_sign_in(userid: str, db: AsyncSession = Depends(get_db)):
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
-    emit_event("sign_in_start", userid, f"手动签到: {acc.nickname or userid}")
+    await emit_event("sign_in_start", userid, f"手动签到: {acc.nickname or userid}")
     res = await vip_service.do_sign_in(acc.token, acc.userid, db)
     if res.get("success"):
-        emit_event("sign_in_success", userid, res.get("message", "签到成功"), res)
+        await emit_event("sign_in_success", userid, res.get("message", "签到成功"), res)
     else:
-        emit_event("sign_in_failed", userid, res.get("message", "签到失败"))
+        await emit_event("sign_in_failed", userid, res.get("message", "签到失败"))
     return res
 
 
 @router.post("/sign-in-all")
 async def sign_in_all():
-    """一键对所有账号执行签到"""
-    asyncio.create_task(_auto_sign_all())
-    return {"success": True, "message": "已触发全部账号签到，请查看进度日志"}
+    """一键对所有账号执行签到（Serverless: 同步执行，因为后台任务无法持久化）"""
+    # 在 Serverless 中不能 create_task（请求结束后函数会被冻结）
+    # 所以改为直接执行（Vercel Function 最长 60s，够用）
+    await auto_sign_all()
+    return {"success": True, "message": "签到任务执行完成"}
 
 
 @router.post("/refresh-token-all")
 async def refresh_token_all():
     """一键刷新全部账号Token"""
-    asyncio.create_task(_refresh_all_tokens())
-    return {"success": True, "message": "已触发Token刷新，请查看进度日志"}
+    await refresh_all_tokens()
+    return {"success": True, "message": "Token刷新任务执行完成"}
 
 
 @router.get("/logs/{userid}")
@@ -87,32 +85,35 @@ async def get_claim_logs(userid: str, limit: int = 20, db: AsyncSession = Depend
     return await vip_service.get_claim_logs(db, userid, limit)
 
 
+# ========== 轮询接口（替代 SSE）==========
+
 @router.get("/events")
-async def sse_events():
-    """
-    Server-Sent Events 接口，实时推送进度事件到前端
-    """
-    async def event_generator():
-        last_index = max(0, len(progress_events) - 1)
-        # 先推送最近的5条历史事件
-        for event in progress_events[-5:]:
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+async def poll_events(after_id: int = 0, limit: int = 50):
+    """轮询获取进度事件（替代 SSE，Serverless 兼容）"""
+    events = await get_recent_events(limit=limit, after_id=after_id)
+    return {"events": events}
 
-        while True:
-            if len(progress_events) > last_index:
-                for event in progress_events[last_index:]:
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                last_index = len(progress_events)
-            # 每2秒发送心跳
-            yield f": heartbeat\n\n"
-            await asyncio.sleep(2)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )
+# ========== Vercel Cron 端点 ==========
+
+@router.post("/cron/sign-in")
+async def cron_sign_in(request: Request):
+    """Vercel Cron: 每日自动签到（由 vercel.json cron 配置触发）"""
+    # 验证 Cron 密钥
+    auth = request.headers.get("authorization", "")
+    if auth != f"Bearer {CRON_SECRET}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    await auto_sign_all()
+    return {"success": True, "message": "Cron: 自动签到完成"}
+
+
+@router.post("/cron/refresh-token")
+async def cron_refresh_token(request: Request):
+    """Vercel Cron: 定时刷新 Token"""
+    auth = request.headers.get("authorization", "")
+    if auth != f"Bearer {CRON_SECRET}":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    await refresh_all_tokens()
+    return {"success": True, "message": "Cron: Token刷新完成"}

@@ -1,5 +1,6 @@
 """
 数据库模型定义
+支持 Turso (libSQL) 和本地 SQLite 双模式
 """
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
@@ -62,8 +63,29 @@ class ClaimLog(Base):
     created_at = Column(DateTime, default=_now)
 
 
-# 数据库引擎和会话
-engine = create_async_engine(DATABASE_URL, echo=False)
+class ProgressEvent(Base):
+    """进度事件表（替代内存队列，Serverless 兼容）"""
+    __tablename__ = "progress_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_type = Column(String(32), nullable=False, comment="事件类型")
+    userid = Column(String(64), default="", comment="用户ID")
+    message = Column(Text, default="", comment="事件消息")
+    data = Column(Text, default="{}", comment="附加数据 JSON")
+    created_at = Column(DateTime, default=_now)
+
+
+# ========== 数据库引擎 ==========
+_is_turso = DATABASE_URL.startswith("libsql")
+
+if _is_turso:
+    # Turso / libSQL 模式
+    from libsql_experimental import create_async_engine as libsql_create_engine
+    engine = libsql_create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+else:
+    # 本地 SQLite 模式
+    engine = create_async_engine(DATABASE_URL, echo=False)
+
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -73,7 +95,14 @@ async def get_db():
         yield session
 
 
+_db_initialized = False
+
+
 async def init_db():
     """初始化数据库，创建所有表"""
+    global _db_initialized
+    if _db_initialized:
+        return
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    _db_initialized = True

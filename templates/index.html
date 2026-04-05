@@ -370,7 +370,7 @@ function logout() {
 // ========== 主应用初始化 ==========
 function initApp() {
   loadAccounts();
-  connectSSE();
+  startPolling();
 
   // 回车键触发登录
   document.getElementById('pw-password').addEventListener('keydown', (e) => {
@@ -386,7 +386,6 @@ let qrPollingTimer = null;
 let currentQrKey = '';
 let smsCountdown = 0;
 let smsTimer = null;
-let eventSource = null;
 
 // ========== 工具函数 ==========
 function toast(message, type = 'info') {
@@ -819,6 +818,7 @@ function appendLog(event) {
 
   const el = document.createElement('div');
   el.className = 'flex items-start gap-2 text-xs py-1.5 border-b border-white/5 fade-in';
+  el.dataset.eventId = event.id || '';
   el.innerHTML = `
     <span class="flex-shrink-0 text-gray-500">${event.timestamp}</span>
     <span class="flex-shrink-0">${icon}</span>
@@ -835,23 +835,41 @@ function clearLogs() {
   document.getElementById('log-panel').innerHTML = '<p class="text-gray-500 text-xs text-center py-4">日志已清空</p>';
 }
 
-// ========== SSE 事件流 ==========
-function connectSSE() {
-  if (eventSource) eventSource.close();
-  eventSource = new EventSource(`/api/vip/events?token=${authToken}`);
-  eventSource.onmessage = (e) => {
-    try {
-      const event = JSON.parse(e.data);
-      appendLog(event);
+// ========== 轮询事件（替代 SSE，Serverless 兼容）==========
+let _lastEventId = 0;
+let _pollTimer = null;
+
+function startPolling() {
+  if (_pollTimer) clearInterval(_pollTimer);
+  // 首次加载
+  pollEvents();
+  // 每3秒轮询一次
+  _pollTimer = setInterval(pollEvents, 3000);
+}
+
+async function pollEvents() {
+  try {
+    const r = await fetch(`/api/vip/events?after_id=${_lastEventId}&limit=50`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (r.status === 401) return;
+    if (!r.ok) return;
+    const data = await r.json();
+    const events = data.events || [];
+    if (events.length > 0) {
+      events.forEach(e => appendLog(e));
+      _lastEventId = events[events.length - 1].id || _lastEventId;
       // 登录成功或签到成功后刷新账号列表
-      if (['login_success', 'sign_in_success', 'sign_in_failed'].includes(event.type)) {
-        setTimeout(loadAccounts, 500);
-      }
-    } catch {}
-  };
-  eventSource.onerror = () => {
-    setTimeout(connectSSE, 5000); // 断线重连
-  };
+      const shouldRefresh = events.some(e =>
+        ['login_success', 'sign_in_success', 'sign_in_failed'].includes(e.type)
+      );
+      if (shouldRefresh) setTimeout(loadAccounts, 500);
+    }
+  } catch {}
+}
+
+function stopPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
 }
 
 // ========== 页面初始化 ==========

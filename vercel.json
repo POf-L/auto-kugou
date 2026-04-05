@@ -11,5 +11,15 @@
       "src": "/(.*)",
       "dest": "api/index.py"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/vip/cron/sign-in",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/vip/cron/refresh-token",
+      "schedule": "30 */2 * * *"
+    }
   ]
 }

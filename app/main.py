@@ -1,20 +1,20 @@
 """
-FastAPI 应用主入口
-"""
-import uvicorn
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
-from loguru import logger
+FastAPI 应用主入口（Serverless 兼容版）
 
-from app.config import HOST, PORT, DEBUG
+改造要点：
+- 去掉 uvicorn 和 lifespan（Serverless 不需要）
+- 数据库按需初始化（每个请求自动触发 init_db）
+- 去掉 StaticFiles 挂载（Serverless 不支持）
+- 去掉 scheduler 和后台任务
+"""
+import os
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, HTMLResponse
+
 from app.models import init_db
+from app.api.admin import router as admin_router, validate_token
 from app.api.auth import router as auth_router
 from app.api.vip import router as vip_router
-from app.api.admin import router as admin_router, validate_token
-from app.tasks.scheduler import scheduler, setup_scheduler
-from app.services.kugou_client import kugou_client
 
 # 白名单路径（不需要认证）
 _PUBLIC_PATHS = {
@@ -25,17 +25,20 @@ _PUBLIC_PATHS = {
     "/api/admin/login",
 }
 
+# HTML 页面内容（内嵌，不再依赖文件系统）
+_PAGE_HTML = None
+
 
 async def _check_auth(request: Request, call_next):
-    """认证中间件：检查 session token"""
+    """认证中间件：检查 JWT token"""
     path = request.url.path
 
     # 白名单直接放行
     if path in _PUBLIC_PATHS:
         return await call_next(request)
 
-    # 静态文件放行（CSS/JS等资源，不含敏感数据）
-    if path.startswith("/static/"):
+    # Cron 端点单独验证（在 vip.py 中处理）
+    if "/api/vip/cron/" in path:
         return await call_next(request)
 
     # 从 Authorization header 或 query 参数获取 token
@@ -47,13 +50,6 @@ async def _check_auth(request: Request, call_next):
         token = request.query_params.get("token", "")
 
     if not validate_token(token):
-        # API 请求返回 401 JSON
-        if path.startswith("/api/"):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "未授权访问", "code": "unauthorized"},
-            )
-        # 页面请求返回 401（前端会拦截并显示登录页）
         return JSONResponse(
             status_code=401,
             content={"detail": "unauthorized", "code": "unauthorized"},
@@ -62,32 +58,10 @@ async def _check_auth(request: Request, call_next):
     return await call_next(request)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    logger.info("🎵 酷狗VIP自动领取工具 启动中...")
-    # 初始化数据库
-    await init_db()
-    logger.info("✅ 数据库初始化完成")
-    # 启动定时任务
-    setup_scheduler()
-    scheduler.start()
-    logger.info("✅ 定时任务已启动")
-    logger.info(f"🌐 Web界面: http://{HOST if HOST != '0.0.0.0' else '127.0.0.1'}:{PORT}")
-
-    yield
-
-    # 关闭清理
-    scheduler.shutdown(wait=False)
-    await kugou_client.close()
-    logger.info("👋 服务已停止")
-
-
 app = FastAPI(
     title="酷狗VIP自动领取工具",
     description="自动领取酷狗音乐VIP，支持多账号管理",
-    version="1.0.0",
-    lifespan=lifespan,
+    version="2.0.0",
 )
 
 # 注册认证中间件
@@ -98,26 +72,23 @@ app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(vip_router)
 
-# 挂载静态文件
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 
 @app.get("/")
 async def index():
     """返回主页"""
-    return FileResponse("templates/index.html")
+    global _PAGE_HTML
+    if _PAGE_HTML is None:
+        try:
+            # 兼容本地和 Vercel 部署路径
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            html_path = os.path.join(base_dir, "templates", "index.html")
+            with open(html_path, "r", encoding="utf-8") as f:
+                _PAGE_HTML = f.read()
+        except FileNotFoundError:
+            _PAGE_HTML = "<h1>Page not found: templates/index.html</h1>"
+    return HTMLResponse(_PAGE_HTML)
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "message": "酷狗VIP工具运行中"}
-
-
-if __name__ == "__main__":
-    uvicorn.run(
-        "app.main:app",
-        host=HOST,
-        port=PORT,
-        reload=DEBUG,
-        log_level="info",
-    )

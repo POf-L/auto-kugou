@@ -44,7 +44,7 @@ async def login_password(req: PasswordLoginRequest, db: AsyncSession = Depends(g
     result = await auth_service.login_by_password(req.username, req.password)
     if result.get("success"):
         await _save_account(db, result, "password")
-        emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（密码）")
+        await emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（密码）")
     return result
 
 
@@ -60,7 +60,7 @@ async def login_sms(req: SmsLoginRequest, db: AsyncSession = Depends(get_db)):
     result = await auth_service.login_by_sms(req.mobile, req.code)
     if result.get("success"):
         await _save_account(db, result, "sms")
-        emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（验证码）")
+        await emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（验证码）")
     return result
 
 
@@ -76,7 +76,7 @@ async def check_qrcode(req: QrCheckRequest, db: AsyncSession = Depends(get_db)):
     result = await auth_service.check_qrcode_status(req.key)
     if result.get("qr_status") == "success" and result.get("success"):
         await _save_account(db, result, "qrcode")
-        emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（扫码）")
+        await emit_event("login_success", result["userid"], f"账号 {result.get('nickname', result['userid'])} 登录成功（扫码）")
     return result
 
 
