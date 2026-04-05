@@ -75,21 +75,31 @@ class ProgressEvent(Base):
     created_at = Column(DateTime, default=_now)
 
 
-# ========== 数据库引擎 ==========
-if DATABASE_URL.startswith(("postgres://", "postgresql://")):
-    # Vercel Postgres (Neon) 模式
-    # Neon 的 pgbouncer 端口需要 pool_size=1 避免 prepared statement 错误
-    url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-    engine = create_engine(url, pool_size=1, pool_recycle=300)
-else:
-    # 本地 SQLite 模式
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# ========== 数据库引擎（延迟初始化，避免模块导入时崩溃）==========
+_engine = None
+SessionLocal = None
 
-SessionLocal = sessionmaker(engine, expire_on_commit=False)
+
+def _get_engine():
+    """延迟创建数据库引擎（Serverless 兼容）"""
+    global _engine, SessionLocal
+    if _engine is None:
+        db_url = DATABASE_URL
+        if db_url.startswith(("postgres://", "postgresql://")):
+            # Vercel Postgres (Neon) 模式
+            # 使用 psycopg2 驱动，Neon 的 pgbouncer 需要 pool_size=1
+            url = db_url.replace("postgres://", "postgresql://", 1)
+            _engine = create_engine(url, pool_size=1, pool_recycle=300)
+        else:
+            # 本地 SQLite 模式
+            _engine = create_engine(db_url, connect_args={"check_same_thread": False})
+        SessionLocal = sessionmaker(_engine, expire_on_commit=False)
+    return _engine
 
 
 def get_db():
     """获取数据库会话（依赖注入）"""
+    _get_engine()  # 确保引擎已初始化
     db = SessionLocal()
     try:
         yield db
@@ -105,5 +115,6 @@ def init_db():
     global _db_initialized
     if _db_initialized:
         return
+    engine = _get_engine()
     Base.metadata.create_all(bind=engine)
     _db_initialized = True
