@@ -19,7 +19,7 @@
     },
     {
       "path": "/api/vip/cron/refresh-token",
-      "schedule": "30 */2 * * *"
+      "schedule": "30 2 * * *"
     }
   ]
 }

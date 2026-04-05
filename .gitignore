@@ -25,6 +25,7 @@ data/*.db
 # Environment
 .env
 .env.local
+.env.vercel.local
 
 # Test files
 test_*.py
@@ -42,3 +43,4 @@ build/
 
 # EchoMusic reference project (not needed for deployment)
 EchoMusic/
+.vercel

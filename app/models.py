@@ -4,6 +4,7 @@
 使用同步 SQLAlchemy（Serverless 兼容）
 """
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from app.config import DATABASE_URL
@@ -92,6 +93,9 @@ def _get_engine():
             _engine = create_engine(url, pool_size=1, pool_recycle=300)
         else:
             # 本地 SQLite 模式
+            if db_url.startswith("sqlite:///"):
+                db_file = db_url.removeprefix("sqlite:///")
+                Path(db_file).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
             _engine = create_engine(db_url, connect_args={"check_same_thread": False})
         SessionLocal = sessionmaker(_engine, expire_on_commit=False)
     return _engine

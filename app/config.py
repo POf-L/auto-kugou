@@ -11,10 +11,14 @@ PORT = int(os.getenv("PORT", 8000))
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 # 数据库: 优先使用 Vercel Postgres，回退到本地 SQLite
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 if not DATABASE_URL:
-    # 本地 SQLite 默认路径
-    DATABASE_URL = "sqlite:///./data/kugou.db"
+    # Vercel 无数据库时回退到 /tmp，避免只读文件系统导致启动失败
+    if os.getenv("VERCEL"):
+        DATABASE_URL = "sqlite:////tmp/kugou.db"
+    else:
+        # 本地 SQLite 默认路径
+        DATABASE_URL = "sqlite:///./data/kugou.db"
 
 TOKEN_REFRESH_INTERVAL = int(os.getenv("TOKEN_REFRESH_INTERVAL", 5400))
 VIP_CHECK_INTERVAL = int(os.getenv("VIP_CHECK_INTERVAL", 3600))
