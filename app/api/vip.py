@@ -72,7 +72,7 @@ async def sign_in_all():
 @router.post("/refresh-token-all")
 async def refresh_token_all():
     """一键刷新全部账号Token"""
-    await refresh_all_tokens()
+    await refresh_all_tokens(emit_events=True)
     return {"success": True, "message": "Token刷新任务执行完成"}
 
 
@@ -112,5 +112,6 @@ async def cron_refresh_token(request: Request):
     if auth != f"Bearer {CRON_SECRET}":
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    await refresh_all_tokens()
+    # 定时任务静默刷新，避免在前端日志里反复刷出失败噪音
+    await refresh_all_tokens(emit_events=False)
     return {"success": True, "message": "Cron: Token刷新完成"}

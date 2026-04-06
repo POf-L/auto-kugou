@@ -149,7 +149,7 @@ async def get_recent_events(limit: int = 50, after_id: int = 0) -> list[dict]:
         return []
 
 
-async def refresh_all_tokens():
+async def refresh_all_tokens(emit_events: bool = True):
     """刷新所有激活账号的 Token"""
     logger.info(">>> 开始批量刷新Token")
     db = SessionLocal()
@@ -165,7 +165,7 @@ async def refresh_all_tokens():
                 elapsed = (datetime.now(_CST) - last_refresh).total_seconds()
                 if elapsed < 5400:
                     continue
-            await _refresh_account_token(db, acc, emit_events=True)
+            await _refresh_account_token(db, acc, emit_events=emit_events)
     finally:
         db.close()
 
