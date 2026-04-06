@@ -13,16 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Refresh tokens before renew
-        env:
-          BASE_URL: https://kugou.supersb.me
-          CRON_SECRET: ${{ secrets.AUTO_KUGOU_CRON_SECRET }}
-        run: |
-          curl --fail --show-error --silent \
-            -X POST "$BASE_URL/api/vip/cron/refresh-token" \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -H "Content-Type: application/json"
-
       - name: Check expired accounts and renew VIP
         env:
           BASE_URL: https://kugou.supersb.me

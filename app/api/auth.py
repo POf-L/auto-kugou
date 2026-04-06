@@ -15,6 +15,8 @@ from app.tasks.scheduler import emit_event
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+_CST = timezone(timedelta(hours=8))
+
 # 存储二维码轮询的会话
 _qr_sessions: dict[str, str] = {}  # key -> userid(若已登录)
 
@@ -173,6 +175,14 @@ def _save_account(db, login_result: dict, login_type: str):
     db.commit()
 
 
+def _fmt_cst(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_CST).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _format_account(acc: Account) -> dict:
     return {
         "userid": acc.userid,
@@ -183,7 +193,7 @@ def _format_account(acc: Account) -> dict:
         "login_type": acc.login_type,
         "auto_claim": acc.auto_claim,
         "is_active": acc.is_active,
-        "last_claim_time": acc.last_claim_time.strftime("%Y-%m-%d %H:%M:%S") if acc.last_claim_time else "",
-        "last_token_refresh": acc.last_token_refresh.strftime("%Y-%m-%d %H:%M:%S") if acc.last_token_refresh else "",
-        "created_at": acc.created_at.strftime("%Y-%m-%d %H:%M:%S") if acc.created_at else "",
+        "last_claim_time": _fmt_cst(acc.last_claim_time),
+        "last_token_refresh": _fmt_cst(acc.last_token_refresh),
+        "created_at": _fmt_cst(acc.created_at),
     }

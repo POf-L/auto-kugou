@@ -18,6 +18,14 @@ def _now():
     return datetime.now(_CST)
 
 
+def _fmt_cst(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_CST).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _parse_vip_expire_time(value) -> datetime | None:
     """解析 VIP 过期时间，统一转为中国时区"""
     if value is None:
@@ -352,7 +360,7 @@ def get_claim_logs(db, userid: str, limit: int = 20) -> list[dict]:
                 "status": log.status,
                 "message": log.message,
                 "claim_type": log.claim_type,
-                "created_at": log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else "",
+                "created_at": _fmt_cst(log.created_at),
             }
             for log in logs
         ]

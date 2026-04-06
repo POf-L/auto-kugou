@@ -23,8 +23,64 @@ def _ensure_cst(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=_CST)
+        return dt.replace(tzinfo=timezone.utc).astimezone(_CST)
     return dt.astimezone(_CST)
+
+
+def _format_cst(dt: datetime | None) -> str:
+    """格式化为中国时间字符串"""
+    normalized = _ensure_cst(dt)
+    return normalized.strftime("%Y-%m-%d %H:%M:%S") if normalized else ""
+
+
+def _looks_like_auth_failure(message: str) -> bool:
+    text = (message or "").lower()
+    keywords = ("登录失败", "未登录", "token", "unauthorized", "auth")
+    return any(k in text for k in keywords)
+
+
+async def _refresh_account_token(db, acc: Account, *, emit_events: bool = True) -> bool:
+    """刷新单个账号 Token，支持静默模式（自动续领内部回退）"""
+    try:
+        if emit_events:
+            await emit_event("token_refresh", acc.userid, "正在刷新Token...")
+
+        from app.services.auth_service import refresh_token
+
+        res = await refresh_token(acc.token, acc.userid)
+        if not res.get("success"):
+            if emit_events:
+                await emit_event("token_refresh_failed", acc.userid, f"Token刷新失败: {res.get('message')}")
+            else:
+                logger.warning(f"账号 {acc.userid} Token刷新失败: {res.get('message')}")
+            return False
+
+        new_token = res.get("token", acc.token)
+        new_vip_type = res.get("vip_type", acc.vip_type)
+        refresh_time = datetime.now(_CST)
+        db.execute(
+            update(Account)
+            .where(Account.userid == acc.userid)
+            .values(
+                token=new_token,
+                vip_type=new_vip_type,
+                last_token_refresh=refresh_time,
+            )
+        )
+        db.commit()
+        acc.token = new_token
+        acc.vip_type = new_vip_type
+        acc.last_token_refresh = refresh_time
+
+        if emit_events:
+            await emit_event("token_refresh", acc.userid, "Token刷新成功", {"vip_type": new_vip_type})
+        return True
+    except Exception as e:
+        if emit_events:
+            await emit_event("token_refresh_failed", acc.userid, f"Token刷新异常: {e}")
+        else:
+            logger.warning(f"账号 {acc.userid} Token刷新异常: {e}")
+        return False
 
 
 async def emit_event(event_type: str, userid: str, message: str, data: dict = None):
@@ -82,7 +138,7 @@ async def get_recent_events(limit: int = 50, after_id: int = 0) -> list[dict]:
                     "userid": e.userid,
                     "message": e.message,
                     "data": json.loads(e.data) if e.data else {},
-                    "timestamp": e.created_at.strftime("%Y-%m-%d %H:%M:%S") if e.created_at else "",
+                    "timestamp": _format_cst(e.created_at),
                 }
                 for e in reversed(events)
             ]
@@ -109,26 +165,7 @@ async def refresh_all_tokens():
                 elapsed = (datetime.now(_CST) - last_refresh).total_seconds()
                 if elapsed < 5400:
                     continue
-            try:
-                await emit_event("token_refresh", acc.userid, "正在刷新Token...")
-                from app.services.auth_service import refresh_token
-                res = await refresh_token(acc.token, acc.userid)
-                if res.get("success"):
-                    db.execute(
-                        update(Account)
-                        .where(Account.userid == acc.userid)
-                        .values(
-                            token=res.get("token", acc.token),
-                            vip_type=res.get("vip_type", acc.vip_type),
-                            last_token_refresh=datetime.now(_CST),
-                        )
-                    )
-                    db.commit()
-                    await emit_event("token_refresh", acc.userid, "Token刷新成功", {"vip_type": res.get("vip_type")})
-                else:
-                    await emit_event("token_refresh_failed", acc.userid, f"Token刷新失败: {res.get('message')}")
-            except Exception as e:
-                await emit_event("token_refresh_failed", acc.userid, f"Token刷新异常: {e}")
+            await _refresh_account_token(db, acc, emit_events=True)
     finally:
         db.close()
 
@@ -182,6 +219,11 @@ async def auto_renew_all():
                 continue
             try:
                 renew_check = await vip_service.should_auto_renew(acc.token, acc.userid)
+                if not renew_check.get("success"):
+                    refreshed = await _refresh_account_token(db, acc, emit_events=False)
+                    if refreshed:
+                        renew_check = await vip_service.should_auto_renew(acc.token, acc.userid)
+
                 if not renew_check.get("should_renew"):
                     expire_tip = renew_check.get("expire_time", "")
                     logger.info(
@@ -203,6 +245,10 @@ async def auto_renew_all():
                     f"检测到 VIP 过期，正在自动续领 {acc.nickname or acc.userid}...",
                 )
                 res = await vip_service.do_sign_in(acc.token, acc.userid, db)
+                if (not res.get("success")) and _looks_like_auth_failure(res.get("message", "")):
+                    refreshed = await _refresh_account_token(db, acc, emit_events=False)
+                    if refreshed:
+                        res = await vip_service.do_sign_in(acc.token, acc.userid, db)
                 if res.get("success"):
                     if res.get("skipped"):
                         await emit_event("renew_skip", acc.userid, res.get("message", "今日已签到，跳过自动续领"), res)
