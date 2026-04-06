@@ -231,7 +231,7 @@ async def should_auto_renew(token: str, userid: str) -> dict:
 
 async def do_sign_in(token: str, userid: str, db) -> dict:
     """
-    执行签到/领取VIP操作（对齐 EchoMusic 两步流程）
+    执行完整签到/领取VIP操作（对齐 EchoMusic 两步流程）
     第1步：领取畅听VIP (receive_vip_listen_song)
     第2步：升级概念VIP (upgrade_vip_reward)
     """
@@ -248,55 +248,19 @@ async def do_sign_in(token: str, userid: str, db) -> dict:
             }
 
         # 第1步：领取畅听VIP
-        tvip_result = await kugou_client.receive_tvip(token=token, userid=userid)
-        tvip_error_code = tvip_result.get("error_code", tvip_result.get("errcode", -1))
-        tvip_status = tvip_result.get("status", 0)
-        tvip_success = tvip_error_code == 0 and tvip_status == 1
-        # error_code=30000/30002: 今日已领取过
-        tvip_already = tvip_error_code in (30000, 30002)
+        tvip_result = await _do_sign_tvip(token, userid)
+        if not tvip_result["success"]:
+            return {"success": False, "message": tvip_result["message"]}
 
-        if tvip_success:
-            tvip_msg = "畅听VIP领取成功"
-        elif tvip_already:
-            tvip_msg = "畅听VIP今日已领取"
-            tvip_success = True  # 视为已领取
-        else:
-            tvip_err = tvip_result.get("error_msg") or tvip_result.get("errmsg") or tvip_result.get("msg") or f"畅听VIP领取失败(error_code={tvip_error_code})"
-            _write_claim_log(db, userid, "failed", tvip_err, "receive_tvip")
-            return {"success": False, "message": tvip_err}
-
-        # 第2步：尝试升级概念VIP（需要先有畅听VIP）
-        svip_success = False
-        svip_msg = ""
-        # 先查询当前 VIP 状态，判断是否已有概念VIP
-        vip_info = await get_vip_status(token, userid)
-        busi_vips = vip_info.get("active_vips", [])
-        has_svip = any(v.get("product_type") == "svip" for v in busi_vips)
-
-        if has_svip:
-            svip_success = True
-            svip_msg = "概念VIP已生效"
-        else:
-            # 尝试升级
-            upgrade_result = await kugou_client.upgrade_svip(token=token, userid=userid)
-            upgrade_error_code = upgrade_result.get("error_code", upgrade_result.get("errcode", -1))
-            upgrade_status = upgrade_result.get("status", 0)
-            # error_code=297002 表示已达上限（也算成功）
-            if upgrade_status == 1 and upgrade_error_code == 0:
-                svip_success = True
-                svip_msg = "概念VIP升级成功"
-            elif upgrade_error_code == 297002:
-                svip_success = True
-                svip_msg = "概念VIP已达上限"
-            else:
-                upgrade_err = upgrade_result.get("error_msg") or upgrade_result.get("errmsg") or upgrade_result.get("msg") or ""
-                svip_msg = f"概念VIP升级失败: {upgrade_err}" if upgrade_err else "概念VIP升级失败"
-                # 升级失败不算整体失败，畅听VIP已领取成功
+        # 第2步：尝试升级概念VIP
+        svip_result = await _do_upgrade_svip(token, userid)
 
         # 组装结果消息
-        if svip_success and "升级成功" in svip_msg:
+        tvip_msg = tvip_result["message"]
+        svip_msg = svip_result["message"]
+        if svip_result["success"] and "升级成功" in svip_msg:
             full_msg = f"签到成功！{tvip_msg}，{svip_msg}"
-        elif svip_success:
+        elif svip_result["success"]:
             full_msg = f"签到成功！{tvip_msg}，{svip_msg}"
         else:
             full_msg = f"签到成功！{tvip_msg}（{svip_msg}）"
@@ -308,8 +272,8 @@ async def do_sign_in(token: str, userid: str, db) -> dict:
             "success": True,
             "skipped": False,
             "message": full_msg,
-            "tvip_success": tvip_success,
-            "svip_success": svip_success,
+            "tvip_success": True,
+            "svip_success": svip_result["success"],
             "tvip_msg": tvip_msg,
             "svip_msg": svip_msg,
         }
@@ -319,6 +283,108 @@ async def do_sign_in(token: str, userid: str, db) -> dict:
         logger.error(err)
         _write_claim_log(db, userid, "failed", err, "sign_in")
         return {"success": False, "message": err}
+
+
+async def do_sign_tvip_only(token: str, userid: str, db) -> dict:
+    """仅执行畅听VIP签到（独立按钮用）"""
+    try:
+        sign_info = await get_sign_info(token, userid)
+        if sign_info.get("signed_today"):
+            _write_claim_log(db, userid, "skipped", "畅听VIP: 今日已签到", "sign_tvip")
+            return {"success": True, "skipped": True, "message": "今日已完成畅听VIP签到"}
+
+        result = await _do_sign_tvip(token, userid)
+        _write_claim_log(db, userid, "success" if result["success"] else "failed",
+                         result["message"], "sign_tvip")
+        if result["success"]:
+            _update_account_claim_time(db, userid)
+        return result
+
+    except Exception as e:
+        err = f"畅听VIP签到异常: {str(e)}"
+        logger.error(err)
+        _write_claim_log(db, userid, "failed", err, "sign_tvip")
+        return {"success": False, "message": err}
+
+
+async def do_upgrade_svip_only(token: str, userid: str, db) -> dict:
+    """仅执行概念VIP升级（独立按钮用，需要先有畅听VIP）"""
+    try:
+        # 先检查是否有有效的畅听VIP
+        vip_info = await get_vip_status(token, userid)
+        busi_vips = vip_info.get("active_vips", [])
+        has_tvip = any(v.get("product_type") in ("tvip", "svip") for v in busi_vips)
+
+        if not has_tvip:
+            # 尝试先领取畅听VIP，再升级
+            tvip_result = await _do_sign_tvip(token, userid)
+            if not tvip_result["success"]:
+                return {"success": False, "message": f"概念VIP升级失败: 需要先领取畅听VIP（{tvip_result['message']}）"}
+
+        result = await _do_upgrade_svip(token, userid)
+        _write_claim_log(db, userid, "success" if result["success"] else "failed",
+                         result["message"], "upgrade_svip")
+        if result["success"]:
+            _update_account_claim_time(db, userid)
+        return result
+
+    except Exception as e:
+        err = f"概念VIP升级异常: {str(e)}"
+        logger.error(err)
+        _write_claim_log(db, userid, "failed", err, "upgrade_svip")
+        return {"success": False, "message": err}
+
+
+async def _do_sign_tvip(token: str, userid: str) -> dict:
+    """
+    内部方法: 执行畅听VIP领取（广告播放上报）
+    对应 youth_vip.js: POST /youth/v1/ad/play_report
+    """
+    tvip_result = await kugou_client.receive_tvip(token=token, userid=userid)
+    tvip_error_code = tvip_result.get("error_code", tvip_result.get("errcode", -1))
+    tvip_status = tvip_result.get("status", 0)
+    tvip_success = tvip_error_code == 0 and tvip_status == 1
+    # error_code=30000/30002: 今日已领取过
+    tvip_already = tvip_error_code in (30000, 30002)
+
+    if tvip_success:
+        tvip_msg = "畅听VIP领取成功"
+    elif tvip_already:
+        tvip_msg = "畅听VIP今日已领取"
+        tvip_success = True  # 视为已领取
+    else:
+        tvip_err = tvip_result.get("error_msg") or tvip_result.get("errmsg") or tvip_result.get("msg") or f"畅听VIP领取失败(error_code={tvip_error_code})"
+        return {"success": False, "message": tvip_err}
+
+    return {"success": tvip_success, "message": tvip_msg}
+
+
+async def _do_upgrade_svip(token: str, userid: str) -> dict:
+    """
+    内部方法: 尝试升级概念VIP
+    前置条件: 今日已领取畅听VIP
+    """
+    # 先查询当前 VIP 状态，判断是否已有概念VIP
+    vip_info = await get_vip_status(token, userid)
+    busi_vips = vip_info.get("active_vips", [])
+    has_svip = any(v.get("product_type") == "svip" for v in busi_vips)
+
+    if has_svip:
+        return {"success": True, "message": "概念VIP已生效"}
+
+    # 尝试升级
+    upgrade_result = await kugou_client.upgrade_svip(token=token, userid=userid)
+    upgrade_error_code = upgrade_result.get("error_code", upgrade_result.get("errcode", -1))
+    upgrade_status = upgrade_result.get("status", 0)
+    # error_code=297002 表示已达上限（也算成功）
+    if upgrade_status == 1 and upgrade_error_code == 0:
+        return {"success": True, "message": "概念VIP升级成功"}
+    elif upgrade_error_code == 297002:
+        return {"success": True, "message": "概念VIP已达上限"}
+    else:
+        upgrade_err = upgrade_result.get("error_msg") or upgrade_result.get("errmsg") or upgrade_result.get("msg") or ""
+        svip_msg = f"概念VIP升级失败: {upgrade_err}" if upgrade_err else "概念VIP升级失败"
+        return {"success": False, "message": svip_msg}
 
 
 def _write_claim_log(db, userid: str, status: str, message: str, claim_type: str):

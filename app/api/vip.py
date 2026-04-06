@@ -6,7 +6,11 @@ from sqlalchemy import select
 
 from app.models import get_db, Account, init_db
 from app.services import vip_service
-from app.tasks.scheduler import emit_event, auto_sign_all, auto_renew_all, refresh_all_tokens, get_recent_events
+from app.tasks.scheduler import (
+    emit_event, auto_sign_all, auto_renew_all,
+    refresh_all_tokens, get_recent_events,
+    _sign_in_with_retry, _looks_like_auth_failure,
+)
 from app.config import CRON_SECRET
 
 
@@ -46,17 +50,62 @@ async def get_sign_info(userid: str, db=Depends(get_db)):
 
 @router.post("/sign-in/{userid}")
 async def manual_sign_in(userid: str, db=Depends(get_db)):
-    """手动执行签到"""
+    """
+    手动执行完整签到（畅听VIP + 概念VIP）。
+    签到失败且疑似Token失效时，会自动刷新Token后重试一次。
+    """
     result = db.execute(select(Account).where(Account.userid == userid))
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="账号不存在")
     await emit_event("sign_in_start", userid, f"手动签到: {acc.nickname or userid}")
-    res = await vip_service.do_sign_in(acc.token, acc.userid, db)
+    res = await _sign_in_with_retry(db, acc, vip_service.do_sign_in, emit_events=True)
     if res.get("success"):
         await emit_event("sign_in_success", userid, res.get("message", "签到成功"), res)
-    else:
+    elif not _looks_like_auth_failure(res.get("message", "")):
         await emit_event("sign_in_failed", userid, res.get("message", "签到失败"))
+    # 认证类失败已在 _sign_in_with_retry 内推送事件
+    return res
+
+
+@router.post("/sign-in/{userid}/tvip")
+async def manual_sign_tvip(userid: str, db=Depends(get_db)):
+    """
+    仅执行畅听VIP签到。
+    签到失败且疑似Token失效时，会自动刷新Token后重试一次。
+    """
+    result = db.execute(select(Account).where(Account.userid == userid))
+    acc = result.scalar_one_or_none()
+    if not acc:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    await emit_event("tvip_claim", userid, f"正在领取畅听VIP: {acc.nickname or userid}")
+    res = await _sign_in_with_retry(db, acc, vip_service.do_sign_tvip_only, emit_events=True)
+    if res.get("success"):
+        if not res.get("skipped"):
+            await emit_event("tvip_claim", userid, f"✅ {res.get('message', '畅听VIP领取成功')}", res)
+        else:
+            await emit_event("renew_skip", userid, res.get("message", "今日已签到"), res)
+    elif not _looks_like_auth_failure(res.get("message", "")):
+        await emit_event("sign_in_failed", userid, res.get("message", "畅听VIP领取失败"))
+    return res
+
+
+@router.post("/sign-in/{userid}/svip")
+async def manual_sign_svip(userid: str, db=Depends(get_db)):
+    """
+    仅执行概念VIP升级（需要先有畅听VIP）。
+    签到失败且疑似Token失效时，会自动刷新Token后重试一次。
+    """
+    result = db.execute(select(Account).where(Account.userid == userid))
+    acc = result.scalar_one_or_none()
+    if not acc:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    await emit_event("svip_claim", userid, f"正在升级概念VIP: {acc.nickname or userid}")
+    res = await _sign_in_with_retry(db, acc, vip_service.do_upgrade_svip_only, emit_events=True)
+    if res.get("success"):
+        await emit_event("svip_claim", userid, f"👑 {res.get('message', '概念VIP升级成功')}", res)
+    elif not _looks_like_auth_failure(res.get("message", "")):
+        await emit_event("sign_in_failed", userid, res.get("message", "概念VIP升级失败"))
     return res
 
 
@@ -71,7 +120,7 @@ async def sign_in_all():
 
 @router.post("/refresh-token-all")
 async def refresh_token_all():
-    """一键刷新全部账号Token"""
+    """一键刷新全部账号Token（仅手动触发，不再被 Cron 定时调用）"""
     await refresh_all_tokens(emit_events=True)
     return {"success": True, "message": "Token刷新任务执行完成"}
 
@@ -95,8 +144,13 @@ async def poll_events(after_id: int = 0, limit: int = 50):
 
 @router.post("/cron/sign-in")
 async def cron_sign_in(request: Request):
-    """计划任务: 每小时检查账号 VIP，过期后自动续领"""
-    # 验证 Cron 密钥
+    """
+    Cron 定时任务: 自动续领检查。
+
+    Token 刷新策略已改为「按需触发」：
+    - 不再单独调用 cron/refresh-token
+    - 签到失败且疑似 Token 失效时，自动在内部刷新 Token 并重试
+    """
     auth = request.headers.get("authorization", "")
     if auth != f"Bearer {CRON_SECRET}":
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -107,11 +161,20 @@ async def cron_sign_in(request: Request):
 
 @router.post("/cron/refresh-token")
 async def cron_refresh_token(request: Request):
-    """Vercel Cron: 定时刷新 Token"""
+    """
+    [已弃用] Vercel Cron: 定时刷新 Token。
+
+    此端点保留以兼容已有配置，但实际不做任何操作。
+    Token 刷新已改为签到失败时按需触发（见 /cron/sign-in 内部逻辑）。
+
+    建议：可在 Vercel Dashboard 中移除此 Cron 调度以减少无效调用。
+    """
     auth = request.headers.get("authorization", "")
     if auth != f"Bearer {CRON_SECRET}":
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    # 定时任务静默刷新，避免在前端日志里反复刷出失败噪音
-    await refresh_all_tokens(emit_events=False)
-    return {"success": True, "message": "Cron: Token刷新完成"}
+    return {
+        "success": True,
+        "message": "Cron: Token定时刷新已禁用（改为签到失败时按需刷新）",
+        "skipped": True,
+    }

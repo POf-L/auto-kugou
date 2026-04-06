@@ -644,10 +644,16 @@ async function loadAccounts() {
           </div>
           <!-- 操作按钮 -->
           <div class="flex flex-col gap-1.5 flex-shrink-0">
-            <button onclick="manualSignIn('${acc.userid}')" title="领取今日VIP"
-              class="btn-success text-white text-xs px-3 py-1.5 rounded-lg font-medium">
-              领取VIP
-            </button>
+            <div class="flex gap-1">
+              <button onclick="manualSignTvip('${acc.userid}')" title="签到领取畅听VIP"
+                class="btn-success text-white text-xs px-2.5 py-1.5 rounded-lg font-medium flex-1">
+                🎵 畅听VIP
+              </button>
+              <button onclick="manualSignSvip('${acc.userid}')" title="升级概念VIP(需先领畅听)"
+                class="text-white text-xs px-2.5 py-1.5 rounded-lg font-medium flex-1" style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+                👑 概念VIP
+              </button>
+            </div>
             <button onclick="showDetail('${acc.userid}')" title="查看详情"
               class="glass text-gray-300 text-xs px-3 py-1.5 rounded-lg font-medium hover:text-white transition-colors">
               详情
@@ -697,6 +703,38 @@ async function manualSignIn(userid) {
     loadAccounts();
   } catch(e) {
     toast('签到请求失败: ' + e.message, 'error');
+  }
+}
+
+async function manualSignTvip(userid) {
+  try {
+    const res = await api('POST', `/api/vip/sign-in/${userid}/tvip`);
+    if (res.success) {
+      if (res.skipped) {
+        toast(res.message, 'warn');
+      } else {
+        toast(`🎵 ${res.message || '畅听VIP领取成功'}`, 'success');
+      }
+    } else {
+      toast(`🎵 畅听VIP领取失败: ${res.message || '未知错误'}`, 'error');
+    }
+    loadAccounts();
+  } catch(e) {
+    toast('畅听VIP请求失败: ' + e.message, 'error');
+  }
+}
+
+async function manualSignSvip(userid) {
+  try {
+    const res = await api('POST', `/api/vip/sign-in/${userid}/svip`);
+    if (res.success) {
+      toast(`👑 ${res.message || '概念VIP升级成功'}`, 'success');
+    } else {
+      toast(`👑 概念VIP升级失败: ${res.message || '未知错误'}`, 'error');
+    }
+    loadAccounts();
+  } catch(e) {
+    toast('概念VIP请求失败: ' + e.message, 'error');
   }
 }
 
@@ -790,10 +828,16 @@ async function showDetail(userid) {
               </div>`).join('')}
         </div>
       </div>
-      <button onclick="manualSignIn('${userid}'); closeModal();"
-        class="btn-success w-full py-2.5 rounded-xl text-sm font-semibold text-white mt-1">
-        领取今日VIP
-      </button>
+      <div class="flex gap-2 mt-2">
+        <button onclick="manualSignTvip('${userid}'); closeModal();"
+          class="btn-success flex-1 py-2.5 rounded-xl text-sm font-semibold text-white">
+          🎵 畅听VIP
+        </button>
+        <button onclick="manualSignSvip('${userid}'); closeModal();"
+          class="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white" style="background:linear-gradient(135deg,#f59e0b,#d97706)">
+          👑 概念VIP
+        </button>
+      </div>
     `;
   } catch(e) {
     body.innerHTML = `<p class="text-red-400 text-sm">加载失败: ${e.message}</p>`;
