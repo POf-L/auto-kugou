@@ -201,13 +201,25 @@ async def should_auto_renew(token: str, userid: str) -> dict:
 
     active_vips = vip_status.get("active_vips") or []
     if active_vips:
-        preferred = next((v for v in active_vips if v.get("product_type") == "svip"), None) or active_vips[0]
-        return {
-            "success": True,
-            "should_renew": False,
-            "message": "当前VIP仍有效，跳过自动续领",
-            "expire_time": preferred.get("vip_end_time", ""),
-        }
+        has_svip = any(v.get("product_type") == "svip" for v in active_vips)
+        if has_svip:
+            # 概念VIP仍有效，无需续领
+            preferred = next((v for v in active_vips if v.get("product_type") == "svip"), None)
+            return {
+                "success": True,
+                "should_renew": False,
+                "message": "当前VIP仍有效（概念VIP），跳过自动续领",
+                "expire_time": preferred.get("vip_end_time", ""),
+            }
+        else:
+            # 仅有畅听VIP，没有概念VIP，仍需续领（补升级概念VIP）
+            tvip = next((v for v in active_vips if v.get("product_type") == "tvip"), None)
+            return {
+                "success": True,
+                "should_renew": True,
+                "message": "仅有畅听VIP，概念VIP未生效，需要补升级",
+                "expire_time": tvip.get("vip_end_time", "") if tvip else "",
+            }
 
     expire_time = vip_status.get("expire_time") or ""
     expire_at = _parse_vip_expire_time(expire_time)
@@ -234,19 +246,64 @@ async def do_sign_in(token: str, userid: str, db) -> dict:
     执行完整签到/领取VIP操作（对齐 EchoMusic 两步流程）
     第1步：领取畅听VIP (receive_vip_listen_song)
     第2步：升级概念VIP (upgrade_vip_reward)
+
+    注意：签到记录仅记录畅听VIP领取，不记录概念VIP升级。
+    因此即使今日已签到（畅听VIP已领），仍需检查概念VIP是否已升级，
+    否则会出现畅听VIP已领但概念VIP漏领的情况。
     """
     try:
-        # 先检查今日是否已签到
+        # 先检查今日是否已签到（畅听VIP）
         sign_info = await get_sign_info(token, userid)
-        if sign_info.get("signed_today"):
-            _write_claim_log(db, userid, "skipped", "今日已签到", "sign_in")
-            return {
-                "success": True,
-                "skipped": True,
-                "message": "今日已完成签到",
-                "continuous_days": sign_info.get("continuous_days", 0),
-            }
+        signed_today = sign_info.get("signed_today", False)
 
+        if signed_today:
+            # 畅听VIP已领取，但仍需检查概念VIP是否已升级
+            vip_info = await get_vip_status(token, userid)
+            busi_vips = vip_info.get("active_vips", [])
+            has_svip = any(v.get("product_type") == "svip" for v in busi_vips)
+
+            if has_svip:
+                # 畅听VIP和概念VIP都已领取，真正完成
+                _write_claim_log(db, userid, "skipped", "今日已签到（畅听VIP+概念VIP均有效）", "sign_in")
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "message": "今日已完成签到（畅听VIP+概念VIP均有效）",
+                    "continuous_days": sign_info.get("continuous_days", 0),
+                }
+            else:
+                # 畅听VIP已领但概念VIP未升级，需要补升级
+                logger.info(f"账号 {userid}: 畅听VIP已领取但概念VIP未升级，正在补升级...")
+                svip_result = await _do_upgrade_svip(token, userid)
+
+                if svip_result["success"]:
+                    full_msg = f"概念VIP补升级成功（畅听VIP今日已领取）"
+                    _write_claim_log(db, userid, "success", full_msg, "sign_in")
+                    _update_account_claim_time(db, userid)
+                    return {
+                        "success": True,
+                        "skipped": False,
+                        "message": full_msg,
+                        "tvip_success": True,
+                        "svip_success": True,
+                        "tvip_msg": "畅听VIP今日已领取",
+                        "svip_msg": svip_result["message"],
+                    }
+                else:
+                    # 升级失败，但仍算畅听VIP成功
+                    full_msg = f"畅听VIP已领取，但概念VIP升级失败（{svip_result['message']}）"
+                    _write_claim_log(db, userid, "success", full_msg, "sign_in")
+                    return {
+                        "success": True,
+                        "skipped": False,
+                        "message": full_msg,
+                        "tvip_success": True,
+                        "svip_success": False,
+                        "tvip_msg": "畅听VIP今日已领取",
+                        "svip_msg": svip_result["message"],
+                    }
+
+        # 今日未签到，执行完整流程
         # 第1步：领取畅听VIP
         tvip_result = await _do_sign_tvip(token, userid)
         if not tvip_result["success"]:
