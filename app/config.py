@@ -21,7 +21,7 @@ if not DATABASE_URL:
         DATABASE_URL = "sqlite:///./data/kugou.db"
 
 TOKEN_REFRESH_INTERVAL = int(os.getenv("TOKEN_REFRESH_INTERVAL", 5400))
-VIP_CHECK_INTERVAL = int(os.getenv("VIP_CHECK_INTERVAL", 3600))
+VIP_CHECK_INTERVAL = int(os.getenv("VIP_CHECK_INTERVAL", 300))
 
 # ========== 酷狗 API 常量 ==========
 APP_ID = int(os.getenv("KUGOU_APPID", 1005))
